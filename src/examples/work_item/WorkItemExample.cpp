@@ -32,29 +32,80 @@
  ****************************************************************************/
 
 #include "WorkItemExample.hpp"
+#include "mip_sdk/src/mip/mip_parser.h"
+
+
+serial_port device_port;
+// serial_port *device_port_ptr;
+
+////////////////////////////////////////////////////////////////////////////////
+// MIP Interface Time Access Function
+////////////////////////////////////////////////////////////////////////////////
+
+timestamp_type get_current_timestamp()
+{
+	return hrt_absolute_time();
+//     clock_t curr_time;
+//     curr_time = clock();
+
+//     return (timestamp_type)((double)(curr_time - start_time)/(double)CLOCKS_PER_SEC*1000.0);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// MIP Interface User Recv Data Function
+////////////////////////////////////////////////////////////////////////////////
+
+bool mip::C::mip_interface_user_recv_from_device(mip_interface* device, uint8_t* buffer, size_t max_length, size_t* out_length, timestamp_type* timestamp_out)
+{
+    (void)device;
+
+    *timestamp_out = get_current_timestamp();
+    if( !serial_port_read(&device_port, buffer, max_length, out_length) )
+        return false;
+
+    return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// MIP Interface User Send Data Function
+////////////////////////////////////////////////////////////////////////////////
+
+bool mip::C::mip_interface_user_send_to_device(mip_interface* device, const uint8_t* data, size_t length)
+{
+	size_t bytes_written;
+	for (size_t i = 0; i < length; i++)
+	{
+		PX4_INFO("%d",data[i]);
+	}
+
+    return serial_port_write(&device_port, data, length, &bytes_written);
+}
 
 WorkItemExample::WorkItemExample() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::test1)
 {
+
 }
 
 WorkItemExample::~WorkItemExample()
 {
+	if(serial_port_is_open(&device_port))
+        	serial_port_close(&device_port);
 	perf_free(_loop_perf);
 	perf_free(_loop_interval_perf);
 }
 
 bool WorkItemExample::init()
 {
-	// execute Run() on every sensor_accel publication
-	if (!_sensor_accel_sub.registerCallback()) {
-		PX4_ERR("callback registration failed");
-		return false;
-	}
+	// // execute Run() on every sensor_accel publication
+	// if (!_sensor_accel_sub.registerCallback()) {
+	// 	PX4_ERR("callback registration failed");
+	// 	return false;
+	// }
 
 	// alternatively, Run on fixed interval
-	// ScheduleOnInterval(5000_us); // 2000 us interval, 200 Hz rate
+	ScheduleOnInterval(100_ms);
 
 	return true;
 }
@@ -70,12 +121,48 @@ void WorkItemExample::Run()
 	perf_begin(_loop_perf);
 	perf_count(_loop_interval_perf);
 
+	if(!_is_initialized){
+		if(!serial_port_open(&device_port, "/dev/ttyS2", 57600))
+			PX4_ERR("ERROR: Could not open device port!");
+
+		//
+		//Initialize the MIP interface
+		//
+
+		mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(57600), 1000000);
+
+		//
+		//Ping the device (note: this is good to do to make sure the device is present)
+		//
+
+		if(mip_base_ping(&device) != MIP_ACK_OK){
+			PX4_WARN("Couldn't connect to device");
+		}
+		PX4_INFO("MIP_Size %d",device._max_update_pkts);
+
+		_is_initialized = true;
+	}
+
 	// Check if parameters have changed
 	if (_parameter_update_sub.updated()) {
 		// clear update
 		parameter_update_s param_update;
 		_parameter_update_sub.copy(&param_update);
 		updateParams(); // update module parameters (in DEFINE_PARAMETERS)
+	}
+
+	// if(mip_base_ping(&device) != MIP_ACK_OK){
+	// 	PX4_WARN("Couldn't connect to device");
+	// }
+	// PX4_INFO("MIP_Size %d",device._max_update_pkts);
+
+	unsigned int bytes_written{0};
+	// serial_port_write(&device_port,"Hello World\n",13,&bytes_written);
+
+	char buf[24];
+	size_t num_bytes;
+	if(serial_port_read(&device_port, buf,24,&num_bytes)){
+		serial_port_write(&device_port,buf,num_bytes,&bytes_written);
 	}
 
 
@@ -152,6 +239,7 @@ int WorkItemExample::task_spawn(int argc, char *argv[])
 
 int WorkItemExample::print_status()
 {
+	PX4_INFO_RAW("Serial Port Open %d Handle %d\n",device_port.is_open, device_port.handle);
 	perf_print_counter(_loop_perf);
 	perf_print_counter(_loop_interval_perf);
 	return 0;

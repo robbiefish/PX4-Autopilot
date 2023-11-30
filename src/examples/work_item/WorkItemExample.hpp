@@ -50,7 +50,15 @@
 #include <uORB/topics/sensor_accel.h>
 #include <uORB/topics/vehicle_status.h>
 
+#include "mip_sdk/src/mip/mip_all.h"
+#include "mip_sdk/src/mip/mip_interface.h"
+#include "mip_sdk/src/mip/utils/serial_port.h"
+
+using namespace mip::C;
+
 using namespace time_literals;
+
+// bool mip_interface_user_recv_from_device(mip_interface* device, uint8_t* buffer, size_t max_length, size_t* out_length, timestamp_type* timestamp_out);
 
 class WorkItemExample : public ModuleBase<WorkItemExample>, public ModuleParams, public px4::ScheduledWorkItem
 {
@@ -92,6 +100,8 @@ private:
 		(ParamInt<px4::params::SYS_AUTOCONFIG>) _param_sys_autoconfig  /**< another parameter */
 	)
 
-
+	mip::C::mip_interface device;
 	bool _armed{false};
+	uint8_t parse_buffer[256];
+	bool _is_initialized{false};
 };

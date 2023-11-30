@@ -31,6 +31,8 @@
 #
 ############################################################################
 
+add_subdirectory(mip_sdk)
+
 px4_add_module(
 	MODULE examples__work_item
 	MAIN work_item_example
@@ -42,4 +44,5 @@ px4_add_module(
 		WorkItemExample.hpp
 	DEPENDS
 		px4_work_queue
+		mip_sdk
 	)
