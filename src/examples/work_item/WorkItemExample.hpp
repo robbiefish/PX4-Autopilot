@@ -114,6 +114,10 @@ private:
 	//Sensor-to-vehicle frame transformation (Euler Angles)
 	float sensor_to_vehicle_transformation_euler[3] = {0.0, 0.0, 0.0};
 
+	// Handlers
+	mip_dispatch_handler sensor_data_handlers[5];
+	mip_dispatch_handler filter_data_handlers[4];
+
 	//Device data stores
 	mip_shared_reference_timestamp_data sensor_reference_time;
 	mip_shared_gps_timestamp_data sensor_gps_time;

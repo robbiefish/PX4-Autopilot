@@ -94,10 +94,6 @@ bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint
 {
 	size_t bytes_written;
 
-	for (size_t i = 0; i < length; i++) {
-		PX4_INFO("%d", data[i]);
-	}
-
 	return serial_port_write(&device_port, data, length, &bytes_written);
 }
 
@@ -125,13 +121,7 @@ WorkItemExample::~WorkItemExample()
 
 bool WorkItemExample::init()
 {
-	// // execute Run() on every sensor_accel publication
-	// if (!_sensor_accel_sub.registerCallback()) {
-	// 	PX4_ERR("callback registration failed");
-	// 	return false;
-	// }
-
-	// alternatively, Run on fixed interval
+	// Run on fixed interval
 	ScheduleOnInterval(100_ms);
 
 	return true;
@@ -145,6 +135,7 @@ void WorkItemExample::initialize_cv7()
 
 	if (!serial_port_open(&device_port, "/dev/ttyS2", 57600)) {
 		PX4_ERR("ERROR: Could not open device port!");
+		return;
 	}
 
 	//
@@ -334,24 +325,19 @@ void WorkItemExample::initialize_cv7()
 	//
 
 	//Sensor Data
-	mip_dispatch_handler sensor_data_handlers[4];
-
-
 	mip_interface_register_extractor(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
 					 MIP_DATA_DESC_SHARED_REFERENCE_TIME,     extract_mip_shared_reference_timestamp_data_from_field,
 					 &sensor_reference_time);
-	mip_interface_register_extractor(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
-					 MIP_DATA_DESC_SHARED_GPS_TIME,     extract_mip_shared_gps_timestamp_data_from_field, &sensor_gps_time);
 	mip_interface_register_extractor(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET,
-					 MIP_DATA_DESC_SENSOR_ACCEL_SCALED, extract_mip_sensor_scaled_accel_data_from_field,  &sensor_accel);
+					 MIP_DATA_DESC_SHARED_GPS_TIME,     extract_mip_shared_gps_timestamp_data_from_field, &sensor_gps_time);
 	mip_interface_register_extractor(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET,
-					 MIP_DATA_DESC_SENSOR_GYRO_SCALED,  extract_mip_sensor_scaled_gyro_data_from_field,   &sensor_gyro);
+					 MIP_DATA_DESC_SENSOR_ACCEL_SCALED, extract_mip_sensor_scaled_accel_data_from_field,  &sensor_accel);
 	mip_interface_register_extractor(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET,
+					 MIP_DATA_DESC_SENSOR_GYRO_SCALED,  extract_mip_sensor_scaled_gyro_data_from_field,   &sensor_gyro);
+	mip_interface_register_extractor(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET,
 					 MIP_DATA_DESC_SENSOR_MAG_SCALED,   extract_mip_sensor_scaled_mag_data_from_field,    &sensor_mag);
 
 	//Filter Data
-	mip_dispatch_handler filter_data_handlers[4];
-
 	mip_interface_register_extractor(&device, &filter_data_handlers[0], MIP_FILTER_DATA_DESC_SET,
 					 MIP_DATA_DESC_SHARED_GPS_TIME,         extract_mip_shared_gps_timestamp_data_from_field, &filter_gps_time);
 	mip_interface_register_extractor(&device, &filter_data_handlers[1], MIP_FILTER_DATA_DESC_SET,
@@ -434,52 +420,6 @@ void WorkItemExample::Run()
 	}
 
 	service_cv7();
-
-
-	// Example
-	//  update vehicle_status to check arming state
-	if (_vehicle_status_sub.updated()) {
-		vehicle_status_s vehicle_status;
-
-		if (_vehicle_status_sub.copy(&vehicle_status)) {
-
-			const bool armed = (vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED);
-
-			if (armed && !_armed) {
-				PX4_WARN("vehicle armed due to %d", vehicle_status.latest_arming_reason);
-
-			} else if (!armed && _armed) {
-				PX4_INFO("vehicle disarmed due to %d", vehicle_status.latest_disarming_reason);
-			}
-
-			_armed = armed;
-		}
-	}
-
-
-	// Example
-	//  grab latest accelerometer data
-	if (_sensor_accel_sub.updated()) {
-		sensor_accel_s accel;
-
-		if (_sensor_accel_sub.copy(&accel)) {
-			// DO WORK
-
-			// access parameter value (SYS_AUTOSTART)
-			if (_param_sys_autostart.get() == 1234) {
-				// do something if SYS_AUTOSTART is 1234
-			}
-		}
-	}
-
-
-	// Example
-	//  publish some data
-	orb_test_s data{};
-	data.val = 314159;
-	data.timestamp = hrt_absolute_time();
-	_orb_test_pub.publish(data);
-
 
 	perf_end(_loop_perf);
 }
