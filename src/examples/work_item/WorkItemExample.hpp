@@ -103,7 +103,7 @@ private:
 	)
 
 	bool _armed{false};
-	uint8_t parse_buffer[256];
+	uint8_t parse_buffer[1024];
 	bool _is_initialized{false};
 	hrt_abstime _last_print{0};
 
@@ -125,7 +125,7 @@ private:
 	mip_sensor_scaled_gyro_data   sensor_gyro;
 	mip_sensor_scaled_mag_data    sensor_mag;
 
-	mip_shared_gps_timestamp_data filter_gps_time;
+	mip_filter_timestamp_data filter_time;
 	mip_filter_status_data        filter_status;
 	mip_filter_euler_angles_data  filter_euler_angles;
 

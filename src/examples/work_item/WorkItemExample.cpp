@@ -83,6 +83,8 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 		return false;
 	}
 
+	uint32_t b = *out_length;
+	PX4_INFO("Read %" PRIu32 " bytes", b);
 	return true;
 }
 
@@ -122,7 +124,7 @@ WorkItemExample::~WorkItemExample()
 bool WorkItemExample::init()
 {
 	// Run on fixed interval
-	ScheduleOnInterval(100_ms);
+	ScheduleOnInterval(50_ms);
 
 	return true;
 }
@@ -133,7 +135,7 @@ void WorkItemExample::initialize_cv7()
 		return;
 	}
 
-	if (!serial_port_open(&device_port, "/dev/ttyS2", 57600)) {
+	if (!serial_port_open(&device_port, "/dev/ttyS2", 115200)) {
 		PX4_ERR("ERROR: Could not open device port!");
 		return;
 	}
@@ -142,7 +144,7 @@ void WorkItemExample::initialize_cv7()
 	//Initialize the MIP interface
 	//
 
-	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(57600), 10_ms);
+	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(115200), 30_ms);
 
 	//
 	//Ping the device (note: this is good to do to make sure the device is present)
@@ -175,7 +177,7 @@ void WorkItemExample::initialize_cv7()
 
 
 	//
-	//Setup Sensor data format to 100 Hz
+	//Setup Sensor data format to XXX Hz
 	//
 
 	uint16_t sensor_base_rate;
@@ -339,7 +341,7 @@ void WorkItemExample::initialize_cv7()
 
 	//Filter Data
 	mip_interface_register_extractor(&device, &filter_data_handlers[0], MIP_FILTER_DATA_DESC_SET,
-					 MIP_DATA_DESC_SHARED_GPS_TIME,         extract_mip_shared_gps_timestamp_data_from_field, &filter_gps_time);
+					 MIP_DATA_DESC_FILTER_FILTER_TIMESTAMP, extract_mip_filter_timestamp_data_from_field, &filter_time);
 	mip_interface_register_extractor(&device, &filter_data_handlers[1], MIP_FILTER_DATA_DESC_SET,
 					 MIP_DATA_DESC_FILTER_FILTER_STATUS,    extract_mip_filter_status_data_from_field,        &filter_status);
 	mip_interface_register_extractor(&device, &filter_data_handlers[2], MIP_FILTER_DATA_DESC_SET,
