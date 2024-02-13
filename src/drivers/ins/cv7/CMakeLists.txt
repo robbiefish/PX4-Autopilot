@@ -40,8 +40,8 @@ px4_add_module(
 		#-DDEBUG_BUILD   # uncomment for PX4_DEBUG output
 		#-O0             # uncomment when debugging
 	SRCS
-		WorkItemExample.cpp
-		WorkItemExample.hpp
+		cv7_ins.cpp
+		cv7_ins.hpp
 	DEPENDS
 		px4_work_queue
 		mip_sdk

@@ -31,11 +31,11 @@
  *
  ****************************************************************************/
 
-#include "WorkItemExample.hpp"
+#include "cv7_ins.hpp"
 #include "mip_sdk/src/mip/mip_parser.h"
 
 bool is_logging = true;
-#define LOG_SIZE 1024
+#define LOG_SIZE 128
 uint8_t local_buf[LOG_SIZE];
 uint32_t count = 0;
 
@@ -123,14 +123,14 @@ void exit_gracefully(const char *msg)
 	PX4_ERR("%s", msg);
 }
 
-WorkItemExample::WorkItemExample() :
+CvIns::CvIns() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::test1)
 {
 
 }
 
-WorkItemExample::~WorkItemExample()
+CvIns::~CvIns()
 {
 	if (serial_port_is_open(&device_port)) {
 		serial_port_close(&device_port);
@@ -140,7 +140,7 @@ WorkItemExample::~WorkItemExample()
 	perf_free(_loop_interval_perf);
 }
 
-bool WorkItemExample::init()
+bool CvIns::init()
 {
 	// Run on fixed interval
 	ScheduleOnInterval(5_ms);
@@ -148,7 +148,7 @@ bool WorkItemExample::init()
 	return true;
 }
 
-void WorkItemExample::initialize_cv7()
+void CvIns::initialize_cv7()
 {
 	if (_is_initialized) {
 		return;
@@ -390,7 +390,7 @@ void WorkItemExample::initialize_cv7()
 #include <byteswap.h>
 
 
-void WorkItemExample::service_cv7()
+void CvIns::service_cv7()
 {
 
 	mip_interface_update(&device, false);
@@ -439,7 +439,7 @@ void WorkItemExample::service_cv7()
 	}
 }
 
-void WorkItemExample::Run()
+void CvIns::Run()
 {
 	if (should_exit()) {
 		ScheduleClear();
@@ -465,9 +465,9 @@ void WorkItemExample::Run()
 	perf_end(_loop_perf);
 }
 
-int WorkItemExample::task_spawn(int argc, char *argv[])
+int CvIns::task_spawn(int argc, char *argv[])
 {
-	WorkItemExample *instance = new WorkItemExample();
+	CvIns *instance = new CvIns();
 
 	if (instance) {
 		_object.store(instance);
@@ -488,7 +488,7 @@ int WorkItemExample::task_spawn(int argc, char *argv[])
 	return PX4_ERROR;
 }
 
-int WorkItemExample::print_status()
+int CvIns::print_status()
 {
 	PX4_INFO_RAW("Serial Port Open %d Handle %d\n", device_port.is_open, device_port.handle);
 	perf_print_counter(_loop_perf);
@@ -496,12 +496,12 @@ int WorkItemExample::print_status()
 	return 0;
 }
 
-int WorkItemExample::custom_command(int argc, char *argv[])
+int CvIns::custom_command(int argc, char *argv[])
 {
 	return print_usage("unknown command");
 }
 
-int WorkItemExample::print_usage(const char *reason)
+int CvIns::print_usage(const char *reason)
 {
 	if (reason) {
 		PX4_WARN("%s\n", reason);
@@ -523,5 +523,5 @@ Example of a simple module running out of a work queue.
 
 extern "C" __EXPORT int work_item_example_main(int argc, char *argv[])
 {
-	return WorkItemExample::main(argc, argv);
+	return CvIns::main(argc, argv);
 }
