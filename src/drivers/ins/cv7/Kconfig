@@ -1,0 +1,5 @@
+menuconfig DRIVERS_INS_CV7
+	bool "cv7_ins"
+	default n
+	---help---
+		Enable support for cv7_ins
