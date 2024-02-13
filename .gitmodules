@@ -77,6 +77,6 @@
 	url = https://github.com/PX4/heatshrink.git
 	branch = px4
 [submodule "src/examples/work_item/mip_sdk"]
-	path = src/examples/work_item/mip_sdk
+	path = src/drivers/ins/work_item/mip_sdk
 	url = git@github.com:TeamSenseAI/mip_sdk.git
 	branch = px4_lib
