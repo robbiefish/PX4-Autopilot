@@ -34,6 +34,10 @@
 #include "WorkItemExample.hpp"
 #include "mip_sdk/src/mip/mip_parser.h"
 
+bool is_logging = true;
+#define LOG_SIZE 1024
+uint8_t local_buf[LOG_SIZE];
+uint32_t count = 0;
 
 serial_port device_port;
 // serial_port *device_port_ptr;
@@ -82,9 +86,17 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 	if (!serial_port_read(&device_port, buffer, max_length, out_length)) {
 		return false;
 	}
+	#if 0
+	if(is_logging){
+		if(count >= LOG_SIZE){
+			is_logging = false;
+		}
+		for(unsigned i=0;i<*out_length;i++){
+			local_buf[count++] = buffer[i];
+		}
+	}
+	#endif
 
-	uint32_t b = *out_length;
-	PX4_INFO("Read %" PRIu32 " bytes", b);
 	return true;
 }
 
@@ -95,7 +107,14 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint8_t *data, size_t length)
 {
 	size_t bytes_written;
-
+	#if 0
+	PX4_INFO("Sending");
+	for (size_t i = 0; i < length; i++)
+	{
+		PX4_INFO_RAW("%02X",data[i]);
+	}
+	PX4_INFO_RAW("\n");
+	#endif
 	return serial_port_write(&device_port, data, length, &bytes_written);
 }
 
@@ -124,7 +143,7 @@ WorkItemExample::~WorkItemExample()
 bool WorkItemExample::init()
 {
 	// Run on fixed interval
-	ScheduleOnInterval(50_ms);
+	ScheduleOnInterval(5_ms);
 
 	return true;
 }
@@ -135,7 +154,7 @@ void WorkItemExample::initialize_cv7()
 		return;
 	}
 
-	if (!serial_port_open(&device_port, "/dev/ttyS2", 115200)) {
+	if (!serial_port_open(&device_port, "/dev/ttyS3", 115200)) {
 		PX4_ERR("ERROR: Could not open device port!");
 		return;
 	}
@@ -144,12 +163,12 @@ void WorkItemExample::initialize_cv7()
 	//Initialize the MIP interface
 	//
 
-	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(115200), 30_ms);
+	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(115200)*1_ms, 250_ms);
 
 	//
 	//Ping the device (note: this is good to do to make sure the device is present)
 	//
-
+	PX4_INFO("mip_base_ping");
 	if (mip_base_ping(&device) != MIP_ACK_OK) {
 		exit_gracefully("Couldn't connect to device");
 	}
@@ -161,10 +180,20 @@ void WorkItemExample::initialize_cv7()
 	//
 	//Idle the device (note: this is good to do during setup)
 	//
-
+	PX4_INFO("mip_base_set_idle");
 	if (mip_base_set_idle(&device) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not set the device to idle!");
 	}
+
+	#if 0
+	for (size_t i = 0; i < count; i++)
+	{
+		PX4_INFO_RAW("%02X",local_buf[i]);
+	}
+	PX4_INFO("");
+
+	return;
+	#endif
 
 
 	//
@@ -174,7 +203,6 @@ void WorkItemExample::initialize_cv7()
 	if (mip_3dm_default_device_settings(&device) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not load default device settings!");
 	}
-
 
 	//
 	//Setup Sensor data format to XXX Hz
@@ -189,7 +217,7 @@ void WorkItemExample::initialize_cv7()
 		exit_gracefully("ERROR: Could not get sensor base rate format!");
 	}
 
-	const uint16_t sensor_sample_rate = 125; // Hz
+	const uint16_t sensor_sample_rate = 10; // Hz
 	const uint16_t sensor_decimation = sensor_base_rate / sensor_sample_rate;
 
 	const mip_descriptor_rate sensor_descriptors[4] = {
@@ -214,7 +242,7 @@ void WorkItemExample::initialize_cv7()
 		exit_gracefully("ERROR: Could not get filter base rate format!");
 	}
 
-	const uint16_t filter_sample_rate = 125; // Hz
+	const uint16_t filter_sample_rate = 10; // Hz
 	const uint16_t filter_decimation = filter_base_rate / filter_sample_rate;
 
 	const mip_descriptor_rate filter_descriptors[3] = {
@@ -359,6 +387,8 @@ void WorkItemExample::initialize_cv7()
 	}
 
 }
+#include <byteswap.h>
+
 
 void WorkItemExample::service_cv7()
 {
@@ -370,6 +400,15 @@ void WorkItemExample::service_cv7()
 		if (hrt_elapsed_time(&_last_print) > 250_ms) {
 			_last_print = hrt_absolute_time();
 			PX4_INFO("Waiting for Filter to enter AHRS mode");
+			PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
+				(double)sensor_accel.scaled_accel[2]);
+
+			float x = bswap_32(sensor_accel.scaled_accel[0]);
+			float y = bswap_32(sensor_accel.scaled_accel[1]);
+			float z = bswap_32(sensor_accel.scaled_accel[2]);
+
+			PX4_INFO_RAW("Accel: %f %f %f\n", (double)x, (double)y,	(double)z);
+
 		}
 
 		if (filter_status.filter_state == MIP_FILTER_MODE_AHRS) {
