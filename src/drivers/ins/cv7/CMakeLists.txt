@@ -34,8 +34,8 @@
 add_subdirectory(mip_sdk)
 
 px4_add_module(
-	MODULE examples__work_item
-	MAIN work_item_example
+	MODULE drivers__ins__cv7_ins
+	MAIN cv7_ins
 	COMPILE_FLAGS
 		#-DDEBUG_BUILD   # uncomment for PX4_DEBUG output
 		#-O0             # uncomment when debugging
