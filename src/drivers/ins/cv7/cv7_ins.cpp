@@ -33,17 +33,65 @@
 
 #include "cv7_ins.hpp"
 #include "mip_sdk/src/mip/mip_parser.h"
+#include "CircularBuffer.hpp"
 
 bool is_logging = true;
-#define LOG_SIZE 128
+#define LOG_SIZE 256
 uint8_t local_buf[LOG_SIZE];
 uint32_t count = 0;
+
+#define LOG_TRANSACTIONS
+
+#ifdef LOG_TRANSACTIONS
+RingBufCPP<uint8_t, LOG_SIZE> tx_buf;
+RingBufCPP<uint8_t, LOG_SIZE> rx_buf;
+int tx_writer = -1;
+int rx_writer = -1;
+#endif
 
 serial_port device_port;
 // serial_port *device_port_ptr;
 
 const uint8_t FILTER_ROLL_EVENT_ACTION_ID  = 1;
 const uint8_t FILTER_PITCH_EVENT_ACTION_ID = 2;
+
+
+void handleAccel(void *user, const mip_field *field, timestamp_type timestamp)
+{
+	(void)user;
+	mip_sensor_scaled_accel_data data;
+
+	if (extract_mip_sensor_scaled_accel_data_from_field(field, &data)) {
+		PX4_INFO("Accel Data: %f %f %f", (double)data.scaled_accel[0], (double)data.scaled_accel[1],
+			 (double)data.scaled_accel[2]);
+		// TODO: Publish data here
+	}
+}
+
+void handleGyro(void *user, const mip_field *field, timestamp_type timestamp)
+{
+	(void)user;
+	mip_sensor_scaled_gyro_data data;
+
+	if (extract_mip_sensor_scaled_gyro_data_from_field(field, &data)) {
+		PX4_INFO("Gyro Data:  %f, %f, %f", (double)data.scaled_gyro[0], (double)data.scaled_gyro[1],
+			 (double)data.scaled_gyro[2]);
+	}
+
+	// TODO: Publish data here
+}
+
+void handleMag(void *user, const mip_field *field, timestamp_type timestamp)
+{
+	(void)user;
+	mip_sensor_scaled_mag_data data;
+
+	if (extract_mip_sensor_scaled_mag_data_from_field(field, &data)) {
+		PX4_INFO("Mag Data:   %f, %f, %f", (double)data.scaled_mag[0], (double)data.scaled_mag[1], (double)data.scaled_mag[2]);
+	}
+
+	// TODO: Publish data here
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Filter Event Source Field Handler
@@ -86,16 +134,14 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 	if (!serial_port_read(&device_port, buffer, max_length, out_length)) {
 		return false;
 	}
-	#if 0
-	if(is_logging){
-		if(count >= LOG_SIZE){
-			is_logging = false;
-		}
-		for(unsigned i=0;i<*out_length;i++){
-			local_buf[count++] = buffer[i];
-		}
+
+#ifdef LOG_TRANSACTIONS
+
+	for (size_t i = 0; i < *out_length; i++) {
+		rx_buf.add(buffer[i], true);
 	}
-	#endif
+
+#endif
 
 	return true;
 }
@@ -107,15 +153,73 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint8_t *data, size_t length)
 {
 	size_t bytes_written;
-	#if 0
-	PX4_INFO("Sending");
-	for (size_t i = 0; i < length; i++)
-	{
-		PX4_INFO_RAW("%02X",data[i]);
+
+#ifdef LOG_TRANSACTIONS
+
+	// Copy data into a log to write to the SD Card
+	for (size_t i = 0; i < length; i++) {
+		tx_buf.add(data[i], true);
 	}
-	PX4_INFO_RAW("\n");
-	#endif
+
+#endif
+
 	return serial_port_write(&device_port, data, length, &bytes_written);
+}
+
+void write_logs()
+{
+#ifndef LOG_TRANSACTIONS
+	return;
+#else
+#define CHUNK 64
+	static bool init = false;
+	static int missed_write_counter = 0;
+
+	if (!init) {
+		tx_writer = ::open(PX4_STORAGEDIR "/log/sess100/log001.ulg", O_CREAT | O_WRONLY | O_TRUNC, PX4_O_MODE_666);
+
+		if (tx_writer < 0) {
+			PX4_WARN("Couldn't open FD %d", get_errno());
+		}
+
+		rx_writer = ::open(PX4_STORAGEDIR "/log/sess100/log002.ulg", O_CREAT | O_WRONLY | O_TRUNC, PX4_O_MODE_666);
+		::fsync(tx_writer);
+		::fsync(rx_writer);
+		init = true;
+	}
+
+	if (tx_writer && ((tx_buf.numElements() > CHUNK) || missed_write_counter > 100)) {
+		uint8_t buffer[CHUNK];
+		uint32_t len = 0;
+		int s = tx_buf.numElements() < CHUNK ? tx_buf.numElements() : CHUNK;
+
+		for (int i = 0; i < s; i++) {
+			tx_buf.pull(buffer[i]);
+			len++;
+		}
+
+		::write(tx_writer, buffer, len);
+		::fsync(tx_writer);
+		missed_write_counter = 0;
+
+	} else {
+		missed_write_counter++;
+	}
+
+	if (rx_writer && rx_buf.numElements() > CHUNK) {
+		uint8_t buffer[CHUNK];
+		uint32_t len = 0;
+
+		for (int i = 0; i < CHUNK; i++) {
+			rx_buf.pull(buffer[i]);
+			len++;
+		}
+
+		::write(rx_writer, buffer, len);
+		::fsync(rx_writer);
+	}
+
+#endif
 }
 
 void exit_gracefully(const char *msg)
@@ -136,6 +240,9 @@ CvIns::~CvIns()
 		serial_port_close(&device_port);
 	}
 
+	::close(tx_writer);
+	::close(rx_writer);
+
 	perf_free(_loop_perf);
 	perf_free(_loop_interval_perf);
 }
@@ -154,7 +261,7 @@ void CvIns::initialize_cv7()
 		return;
 	}
 
-	if (!serial_port_open(&device_port, "/dev/ttyS3", 115200)) {
+	if (!serial_port_open(&device_port, "/dev/ttyS2", 115200)) {
 		PX4_ERR("ERROR: Could not open device port!");
 		return;
 	}
@@ -163,12 +270,13 @@ void CvIns::initialize_cv7()
 	//Initialize the MIP interface
 	//
 
-	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(115200)*1_ms, 250_ms);
+	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(115200) * 1_ms, 250_ms);
 
 	//
 	//Ping the device (note: this is good to do to make sure the device is present)
 	//
 	PX4_INFO("mip_base_ping");
+
 	if (mip_base_ping(&device) != MIP_ACK_OK) {
 		exit_gracefully("Couldn't connect to device");
 	}
@@ -181,19 +289,21 @@ void CvIns::initialize_cv7()
 	//Idle the device (note: this is good to do during setup)
 	//
 	PX4_INFO("mip_base_set_idle");
+
 	if (mip_base_set_idle(&device) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not set the device to idle!");
 	}
 
-	#if 0
-	for (size_t i = 0; i < count; i++)
-	{
-		PX4_INFO_RAW("%02X",local_buf[i]);
+#if 0
+
+	for (size_t i = 0; i < count; i++) {
+		PX4_INFO_RAW("%02X", local_buf[i]);
 	}
+
 	PX4_INFO("");
 
 	return;
-	#endif
+#endif
 
 
 	//
@@ -367,6 +477,11 @@ void CvIns::initialize_cv7()
 	mip_interface_register_extractor(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET,
 					 MIP_DATA_DESC_SENSOR_MAG_SCALED,   extract_mip_sensor_scaled_mag_data_from_field,    &sensor_mag);
 
+	// Register some callbacks.
+	// mip_interface_register_field_callback(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_ACCEL_SCALED, &handleAccel, NULL);
+	// mip_interface_register_field_callback(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_GYRO_SCALED , &handleGyro , NULL);
+	// mip_interface_register_field_callback(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_MAG_SCALED  , &handleMag  , NULL);
+
 	//Filter Data
 	mip_interface_register_extractor(&device, &filter_data_handlers[0], MIP_FILTER_DATA_DESC_SET,
 					 MIP_DATA_DESC_FILTER_FILTER_TIMESTAMP, extract_mip_filter_timestamp_data_from_field, &filter_time);
@@ -395,13 +510,15 @@ void CvIns::service_cv7()
 
 	mip_interface_update(&device, false);
 
+	write_logs();
+
 	switch (_state) {
 	case 0:
 		if (hrt_elapsed_time(&_last_print) > 250_ms) {
 			_last_print = hrt_absolute_time();
 			PX4_INFO("Waiting for Filter to enter AHRS mode");
 			PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
-				(double)sensor_accel.scaled_accel[2]);
+				     (double)sensor_accel.scaled_accel[2]);
 
 			float x = bswap_32(sensor_accel.scaled_accel[0]);
 			float y = bswap_32(sensor_accel.scaled_accel[1]);
@@ -514,14 +631,14 @@ Example of a simple module running out of a work queue.
 
 )DESCR_STR");
 
-	PRINT_MODULE_USAGE_NAME("work_item_example", "template");
+	PRINT_MODULE_USAGE_NAME("cv7_ins", "template");
 	PRINT_MODULE_USAGE_COMMAND("start");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;
 }
 
-extern "C" __EXPORT int work_item_example_main(int argc, char *argv[])
+extern "C" __EXPORT int cv7_ins_main(int argc, char *argv[])
 {
 	return CvIns::main(argc, argv);
 }
