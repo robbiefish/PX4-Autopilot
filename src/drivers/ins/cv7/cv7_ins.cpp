@@ -36,7 +36,7 @@
 #include "CircularBuffer.hpp"
 
 bool is_logging = true;
-#define LOG_SIZE 256
+#define LOG_SIZE 12
 uint8_t local_buf[LOG_SIZE];
 uint32_t count = 0;
 
@@ -48,6 +48,8 @@ RingBufCPP<uint8_t, LOG_SIZE> rx_buf;
 int tx_writer = -1;
 int rx_writer = -1;
 #endif
+
+static CvIns *cv7_ins{nullptr};
 
 serial_port device_port;
 // serial_port *device_port_ptr;
@@ -137,8 +139,8 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 
 #ifdef LOG_TRANSACTIONS
 
-	for (size_t i = 0; i < *out_length; i++) {
-		rx_buf.add(buffer[i], true);
+	if (cv7_ins) {
+		cv7_ins->get_logger().enqueue_rx(buffer, *out_length);
 	}
 
 #endif
@@ -156,9 +158,8 @@ bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint
 
 #ifdef LOG_TRANSACTIONS
 
-	// Copy data into a log to write to the SD Card
-	for (size_t i = 0; i < length; i++) {
-		tx_buf.add(data[i], true);
+	if (cv7_ins) {
+		cv7_ins->get_logger().enqueue_tx(data, length);
 	}
 
 #endif
@@ -231,7 +232,7 @@ CvIns::CvIns() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::test1)
 {
-
+	_logger.thread_start();
 }
 
 CvIns::~CvIns()
@@ -239,6 +240,8 @@ CvIns::~CvIns()
 	if (serial_port_is_open(&device_port)) {
 		serial_port_close(&device_port);
 	}
+
+	_logger.thread_stop();
 
 	::close(tx_writer);
 	::close(rx_writer);
@@ -589,6 +592,9 @@ int CvIns::task_spawn(int argc, char *argv[])
 	if (instance) {
 		_object.store(instance);
 		_task_id = task_id_is_work_queue;
+
+		// Get a local reference
+		cv7_ins = instance;
 
 		if (instance->init()) {
 			return PX4_OK;

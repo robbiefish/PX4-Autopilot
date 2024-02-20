@@ -54,6 +54,8 @@
 #include "mip_sdk/src/mip/mip_interface.h"
 #include "mip_sdk/src/mip/utils/serial_port.h"
 
+#include "LogWriter.hpp"
+
 using namespace mip::C;
 
 using namespace time_literals;
@@ -79,6 +81,11 @@ public:
 
 	int print_status() override;
 
+	LogWriter &get_logger()
+	{
+		return _logger;
+	}
+
 private:
 	void Run() override;
 	void initialize_cv7();
@@ -101,7 +108,7 @@ private:
 		(ParamInt<px4::params::SYS_AUTOSTART>) _param_sys_autostart,   /**< example parameter */
 		(ParamInt<px4::params::SYS_AUTOCONFIG>) _param_sys_autoconfig  /**< another parameter */
 	)
-
+	LogWriter _logger;
 	bool _armed{false};
 	uint8_t parse_buffer[1024];
 	bool _is_initialized{false};

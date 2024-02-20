@@ -33,6 +33,8 @@
 
 add_subdirectory(mip_sdk)
 
+project(drivers__ins__cv7_ins LANGUAGES C CXX)
+
 px4_add_module(
 	MODULE drivers__ins__cv7_ins
 	MAIN cv7_ins
