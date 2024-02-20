@@ -35,19 +35,7 @@
 #include "mip_sdk/src/mip/mip_parser.h"
 #include "CircularBuffer.hpp"
 
-bool is_logging = true;
-#define LOG_SIZE 12
-uint8_t local_buf[LOG_SIZE];
-uint32_t count = 0;
-
 #define LOG_TRANSACTIONS
-
-#ifdef LOG_TRANSACTIONS
-RingBufCPP<uint8_t, LOG_SIZE> tx_buf;
-RingBufCPP<uint8_t, LOG_SIZE> rx_buf;
-int tx_writer = -1;
-int rx_writer = -1;
-#endif
 
 static CvIns *cv7_ins{nullptr};
 
@@ -167,62 +155,6 @@ bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint
 	return serial_port_write(&device_port, data, length, &bytes_written);
 }
 
-void write_logs()
-{
-#ifndef LOG_TRANSACTIONS
-	return;
-#else
-#define CHUNK 64
-	static bool init = false;
-	static int missed_write_counter = 0;
-
-	if (!init) {
-		tx_writer = ::open(PX4_STORAGEDIR "/log/sess100/log001.ulg", O_CREAT | O_WRONLY | O_TRUNC, PX4_O_MODE_666);
-
-		if (tx_writer < 0) {
-			PX4_WARN("Couldn't open FD %d", get_errno());
-		}
-
-		rx_writer = ::open(PX4_STORAGEDIR "/log/sess100/log002.ulg", O_CREAT | O_WRONLY | O_TRUNC, PX4_O_MODE_666);
-		::fsync(tx_writer);
-		::fsync(rx_writer);
-		init = true;
-	}
-
-	if (tx_writer && ((tx_buf.numElements() > CHUNK) || missed_write_counter > 100)) {
-		uint8_t buffer[CHUNK];
-		uint32_t len = 0;
-		int s = tx_buf.numElements() < CHUNK ? tx_buf.numElements() : CHUNK;
-
-		for (int i = 0; i < s; i++) {
-			tx_buf.pull(buffer[i]);
-			len++;
-		}
-
-		::write(tx_writer, buffer, len);
-		::fsync(tx_writer);
-		missed_write_counter = 0;
-
-	} else {
-		missed_write_counter++;
-	}
-
-	if (rx_writer && rx_buf.numElements() > CHUNK) {
-		uint8_t buffer[CHUNK];
-		uint32_t len = 0;
-
-		for (int i = 0; i < CHUNK; i++) {
-			rx_buf.pull(buffer[i]);
-			len++;
-		}
-
-		::write(rx_writer, buffer, len);
-		::fsync(rx_writer);
-	}
-
-#endif
-}
-
 void exit_gracefully(const char *msg)
 {
 	PX4_ERR("%s", msg);
@@ -232,7 +164,6 @@ CvIns::CvIns() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::test1)
 {
-	_logger.thread_start();
 }
 
 CvIns::~CvIns()
@@ -241,10 +172,9 @@ CvIns::~CvIns()
 		serial_port_close(&device_port);
 	}
 
+#ifdef LOG_TRANSACTIONS
 	_logger.thread_stop();
-
-	::close(tx_writer);
-	::close(rx_writer);
+#endif
 
 	perf_free(_loop_perf);
 	perf_free(_loop_interval_perf);
@@ -296,18 +226,6 @@ void CvIns::initialize_cv7()
 	if (mip_base_set_idle(&device) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not set the device to idle!");
 	}
-
-#if 0
-
-	for (size_t i = 0; i < count; i++) {
-		PX4_INFO_RAW("%02X", local_buf[i]);
-	}
-
-	PX4_INFO("");
-
-	return;
-#endif
-
 
 	//
 	//Load the device default settings (so the device is in a known state)
@@ -513,7 +431,7 @@ void CvIns::service_cv7()
 
 	mip_interface_update(&device, false);
 
-	write_logs();
+	// write_logs();
 
 	switch (_state) {
 	case 0:
@@ -539,24 +457,36 @@ void CvIns::service_cv7()
 		break;
 
 	case 1:
-		if (hrt_elapsed_time(&_last_print) > 250_ms) {
-			_last_print = hrt_absolute_time();
-			PX4_INFO_RAW("Timestamp %llu Sensor Time %llu\n", _last_print, sensor_reference_time.nanoseconds);
-			PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
-				     (double)sensor_accel.scaled_accel[2]);
-			PX4_INFO_RAW("Gyro: %f %f %f\n", (double)sensor_gyro.scaled_gyro[0], (double)sensor_gyro.scaled_gyro[1],
-				     (double)sensor_gyro.scaled_gyro[2]);
-			PX4_INFO_RAW("Mag: %f %f %f\n", (double)sensor_mag.scaled_mag[0], (double)sensor_mag.scaled_mag[1],
-				     (double)sensor_mag.scaled_mag[2]);
-			PX4_INFO_RAW("R: %f P: %f Y: %f\n", (double)filter_euler_angles.roll, (double)filter_euler_angles.pitch,
-				     (double)filter_euler_angles.yaw);
-		}
+		// if (hrt_elapsed_time(&_last_print) > 250_ms) {
+		// 	_last_print = hrt_absolute_time();
+		// 	PX4_INFO_RAW("Timestamp %llu Sensor Time %llu\n", _last_print, sensor_reference_time.nanoseconds);
+		// 	PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
+		// 		     (double)sensor_accel.scaled_accel[2]);
+		// 	PX4_INFO_RAW("Gyro: %f %f %f\n", (double)sensor_gyro.scaled_gyro[0], (double)sensor_gyro.scaled_gyro[1],
+		// 		     (double)sensor_gyro.scaled_gyro[2]);
+		// 	PX4_INFO_RAW("Mag: %f %f %f\n", (double)sensor_mag.scaled_mag[0], (double)sensor_mag.scaled_mag[1],
+		// 		     (double)sensor_mag.scaled_mag[2]);
+		// 	PX4_INFO_RAW("R: %f P: %f Y: %f\n", (double)filter_euler_angles.roll, (double)filter_euler_angles.pitch,
+		// 		     (double)filter_euler_angles.yaw);
+		// }
 
 		break;
 
 	default:
 		break;
 	}
+}
+
+void CvIns::initialize_logger()
+{
+	if (_logger.is_initialized()) {
+		return;
+	}
+
+	PX4_INFO("Creating the Logger");
+	_logger.set_file_name("sess001.ulg");
+	_logger.thread_start();
+	PX4_INFO("Created the Logger");
 }
 
 void CvIns::Run()
@@ -569,6 +499,10 @@ void CvIns::Run()
 
 	perf_begin(_loop_perf);
 	perf_count(_loop_interval_perf);
+
+#ifdef LOG_TRANSACTIONS
+	initialize_logger();
+#endif
 
 	initialize_cv7();
 

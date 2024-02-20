@@ -90,6 +90,7 @@ private:
 	void Run() override;
 	void initialize_cv7();
 	void service_cv7();
+	void initialize_logger();
 
 	// Publications
 	uORB::Publication<orb_test_s> _orb_test_pub{ORB_ID(orb_test)};

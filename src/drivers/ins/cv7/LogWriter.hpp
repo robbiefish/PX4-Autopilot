@@ -29,6 +29,7 @@ private:
 	px4_sem_t _sem_data;
 	pthread_mutex_t	_mutex = PTHREAD_MUTEX_INITIALIZER;
 	char _file_name[24];
+	bool _is_initialized{false};
 
 	static void *trampoline(void *context);
 	int _tx_writer{-1};
@@ -52,12 +53,6 @@ private:
 		}
 
 		return PX4_OK;
-	}
-
-	void create_file_name(char *name)
-	{
-		strcpy(name, "sess001.ulg");
-		return;
 	}
 
 	int open_writers()
@@ -170,6 +165,10 @@ private:
 public:
 	LogWriter();
 	~LogWriter();
+	bool is_initialized()
+	{
+		return _is_initialized;
+	}
 	void set_file_name(const char *fn)
 	{
 		strcpy(_file_name, fn);
@@ -178,6 +177,7 @@ public:
 	{
 		_thread_should_exit.store(true);
 		pthread_join(_thread, nullptr);
+		pthread_attr_destroy(&loop_attr);
 	}
 	void thread_start();
 	void enqueue_tx(const uint8_t *buffer, size_t len)
@@ -229,7 +229,9 @@ void LogWriter::thread_start()
 
 	pthread_attr_setstacksize(&loop_attr, 1200);
 	pthread_create(&_thread, &loop_attr, LogWriter::trampoline, (void *)this);
-	pthread_attr_destroy(&loop_attr);
+
+	pthread_setname_np(_thread, "CV7 Log");
+	_is_initialized = true;
 }
 
 
