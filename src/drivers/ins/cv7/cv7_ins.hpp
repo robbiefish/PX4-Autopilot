@@ -41,6 +41,9 @@
 
 #include <drivers/drv_hrt.h>
 #include <lib/perf/perf_counter.h>
+#include <lib/drivers/accelerometer/PX4Accelerometer.hpp>
+#include <lib/drivers/gyroscope/PX4Gyroscope.hpp>
+#include <lib/drivers/magnetometer/PX4Magnetometer.hpp>
 
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
@@ -49,6 +52,8 @@
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/sensor_accel.h>
 #include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/sensor_baro.h>
+
 
 #include "mip_sdk/src/mip/mip_all.h"
 #include "mip_sdk/src/mip/mip_interface.h"
@@ -68,6 +73,12 @@ public:
 	CvIns();
 	~CvIns() override;
 
+	static void handleAccel(void *user, const mip_field *field, timestamp_type timestamp);
+	static void handleGyro(void *user, const mip_field *field, timestamp_type timestamp);
+	static void handleMag(void *user, const mip_field *field, timestamp_type timestamp);
+	static void handleBaro(void *user, const mip_field *field, timestamp_type timestamp);
+	void exit_gracefully(const char *msg);
+
 	/** @see ModuleBase */
 	static int task_spawn(int argc, char *argv[]);
 
@@ -78,6 +89,10 @@ public:
 	static int print_usage(const char *reason = nullptr);
 
 	bool init();
+
+	void setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len, uint16_t sensor_sample_rate);
+
+	void loadRotation();
 
 	int print_status() override;
 
@@ -92,8 +107,30 @@ private:
 	void service_cv7();
 	void initialize_logger();
 
+	enum cv7_mode {
+		mode_imu = 0,
+		mode_ahrs = 1,
+		mode_ins = 2
+	};
+
+	struct cv7_configuration {
+		enum cv7_mode _selected_mode = mode_imu;
+		uint16_t _sensor_update_rate_hz = 240;
+		enum Rotation _rot = ROTATION_NONE;
+		uint32_t _device_id{0};
+		float sensor_to_vehicle_transformation_euler[3] = {0.0, 0.0, 0.0};
+	};
+
+	cv7_configuration _config;
+
+	PX4Accelerometer _px4_accel{0};
+	PX4Gyroscope _px4_gyro{0};
+	PX4Magnetometer _px4_mag{0};
+
+	sensor_baro_s _sensor_baro{0};
+
 	// Publications
-	uORB::Publication<orb_test_s> _orb_test_pub{ORB_ID(orb_test)};
+	uORB::PublicationMulti<sensor_baro_s> _sensor_baro_pub{ORB_ID(sensor_baro)};
 
 	// Subscriptions
 	uORB::SubscriptionCallbackWorkItem _sensor_accel_sub{this, ORB_ID(sensor_accel)};        // subscription that schedules CvIns when updated
@@ -119,8 +156,7 @@ private:
 	/******************************/
 	uint8_t _state{0};
 	mip::C::mip_interface device;
-	//Sensor-to-vehicle frame transformation (Euler Angles)
-	float sensor_to_vehicle_transformation_euler[3] = {0.0, 0.0, 0.0};
+
 
 	// Handlers
 	mip_dispatch_handler sensor_data_handlers[5];
@@ -129,9 +165,9 @@ private:
 	//Device data stores
 	mip_shared_reference_timestamp_data sensor_reference_time;
 	mip_shared_gps_timestamp_data sensor_gps_time;
-	mip_sensor_scaled_accel_data  sensor_accel;
-	mip_sensor_scaled_gyro_data   sensor_gyro;
-	mip_sensor_scaled_mag_data    sensor_mag;
+	mip_sensor_scaled_accel_data  sensor_accel{0};
+	mip_sensor_scaled_gyro_data   sensor_gyro{0};
+	mip_sensor_scaled_mag_data    sensor_mag{0};
 
 	mip_filter_timestamp_data filter_time;
 	mip_filter_status_data        filter_status;

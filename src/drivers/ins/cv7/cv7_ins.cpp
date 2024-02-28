@@ -31,61 +31,71 @@
  *
  ****************************************************************************/
 
+#include <lib/drivers/device/Device.hpp>
+
 #include "cv7_ins.hpp"
 #include "mip_sdk/src/mip/mip_parser.h"
 #include "CircularBuffer.hpp"
 
-#define LOG_TRANSACTIONS
+// #define LOG_TRANSACTIONS
 
 static CvIns *cv7_ins{nullptr};
 
 serial_port device_port;
-// serial_port *device_port_ptr;
 
 const uint8_t FILTER_ROLL_EVENT_ACTION_ID  = 1;
 const uint8_t FILTER_PITCH_EVENT_ACTION_ID = 2;
 
 
-void handleAccel(void *user, const mip_field *field, timestamp_type timestamp)
+void CvIns::handleAccel(void *user, const mip_field *field, timestamp_type timestamp)
 {
-	(void)user;
+	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_accel_data data;
 
 	if (extract_mip_sensor_scaled_accel_data_from_field(field, &data)) {
-		PX4_INFO("Accel Data: %f %f %f", (double)data.scaled_accel[0], (double)data.scaled_accel[1],
-			 (double)data.scaled_accel[2]);
-		// TODO: Publish data here
+		PX4_DEBUG("Accel Data: %f %f %f", (double)data.scaled_accel[0], (double)data.scaled_accel[1],
+			  (double)data.scaled_accel[2]);
+		ref->_px4_accel.update(timestamp, data.scaled_accel[0]*CONSTANTS_ONE_G, data.scaled_accel[1]*CONSTANTS_ONE_G,
+				       data.scaled_accel[2]*CONSTANTS_ONE_G);
 	}
 }
 
-void handleGyro(void *user, const mip_field *field, timestamp_type timestamp)
+void CvIns::handleGyro(void *user, const mip_field *field, timestamp_type timestamp)
 {
-	(void)user;
+	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_gyro_data data;
 
 	if (extract_mip_sensor_scaled_gyro_data_from_field(field, &data)) {
-		PX4_INFO("Gyro Data:  %f, %f, %f", (double)data.scaled_gyro[0], (double)data.scaled_gyro[1],
-			 (double)data.scaled_gyro[2]);
+		PX4_DEBUG("Gyro Data:  %f, %f, %f", (double)data.scaled_gyro[0], (double)data.scaled_gyro[1],
+			  (double)data.scaled_gyro[2]);
+		ref->_px4_gyro.update(timestamp, data.scaled_gyro[0], data.scaled_gyro[1], data.scaled_gyro[2]);
 	}
-
-	// TODO: Publish data here
 }
 
-void handleMag(void *user, const mip_field *field, timestamp_type timestamp)
+void CvIns::handleMag(void *user, const mip_field *field, timestamp_type timestamp)
 {
-	(void)user;
+	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_mag_data data;
 
 	if (extract_mip_sensor_scaled_mag_data_from_field(field, &data)) {
-		PX4_INFO("Mag Data:   %f, %f, %f", (double)data.scaled_mag[0], (double)data.scaled_mag[1], (double)data.scaled_mag[2]);
+		PX4_DEBUG("Mag Data:   %f, %f, %f", (double)data.scaled_mag[0], (double)data.scaled_mag[1], (double)data.scaled_mag[2]);
+		ref->_px4_mag.update(timestamp, data.scaled_mag[0], data.scaled_mag[1], data.scaled_mag[2]);
 	}
-
-	// TODO: Publish data here
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Filter Event Source Field Handler
-////////////////////////////////////////////////////////////////////////////////
+void CvIns::handleBaro(void *user, const mip_field *field, timestamp_type timestamp)
+{
+	CvIns *ref = static_cast<CvIns *>(user);
+	mip_sensor_scaled_pressure_data data;
+
+	if (extract_mip_sensor_scaled_pressure_data_from_field(field, &data)) {
+		PX4_DEBUG("Baro Data:   %f", (double)data.scaled_pressure);
+		ref->_sensor_baro.timestamp = timestamp;
+		ref->_sensor_baro.timestamp_sample = timestamp;
+		ref->_sensor_baro.pressure = data.scaled_pressure * 100.f; // convert [Pa] to [mBar]
+		ref->_sensor_baro_pub.publish(ref->_sensor_baro);
+	}
+}
 
 void handle_filter_event_source(void *user, const mip_field *field, timestamp_type timestamp)
 {
@@ -101,18 +111,10 @@ void handle_filter_event_source(void *user, const mip_field *field, timestamp_ty
 	}
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// MIP Interface Time Access Function
-////////////////////////////////////////////////////////////////////////////////
-
 timestamp_type get_current_timestamp()
 {
 	return hrt_absolute_time();
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// MIP Interface User Recv Data Function
-////////////////////////////////////////////////////////////////////////////////
 
 bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t *buffer, size_t max_length,
 		size_t *out_length, timestamp_type *timestamp_out)
@@ -136,10 +138,6 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 	return true;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// MIP Interface User Send Data Function
-////////////////////////////////////////////////////////////////////////////////
-
 bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint8_t *data, size_t length)
 {
 	size_t bytes_written;
@@ -155,15 +153,33 @@ bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint
 	return serial_port_write(&device_port, data, length, &bytes_written);
 }
 
-void exit_gracefully(const char *msg)
+void CvIns::exit_gracefully(const char *msg)
 {
-	PX4_ERR("%s", msg);
+	PX4_ERR("%s: Stopping Application", msg);
+	request_stop();
+	ScheduleNow();
 }
 
 CvIns::CvIns() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::test1)
 {
+	loadRotation();
+
+	device::Device::DeviceId device_id{};
+	device_id.devid_s.devtype = DRV_INS_DEVTYPE_3DMCV7;
+	device_id.devid_s.bus_type = device::Device::DeviceBusType_SERIAL;
+	device_id.devid_s.bus = 2;
+	_config._device_id = device_id.devid;
+	_px4_accel.set_device_id(_config._device_id);
+	_px4_gyro.set_device_id(_config._device_id);
+	_px4_mag.set_device_id(_config._device_id);
+
+	// Set the default values for the baro (which may not change)
+	_sensor_baro.device_id = _config._device_id;
+	_sensor_baro.pressure = 0;
+	_sensor_baro.temperature = 0;
+	_sensor_baro.error_count = 0;
 }
 
 CvIns::~CvIns()
@@ -183,9 +199,38 @@ CvIns::~CvIns()
 bool CvIns::init()
 {
 	// Run on fixed interval
-	ScheduleOnInterval(5_ms);
+	ScheduleOnInterval(1250_us); // 800 Hz
 
 	return true;
+}
+
+void CvIns::setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len, uint16_t sensor_sample_rate)
+{
+	// Get the base rate
+	uint16_t sensor_base_rate;
+
+	if (mip_3dm_get_base_rate(&device, MIP_SENSOR_DATA_DESC_SET, &sensor_base_rate) != MIP_ACK_OK) {
+		exit_gracefully("ERROR: Could not get sensor base rate format!");
+		return;
+	}
+
+	// Compute the desired decimation and update all of the sensors in this set
+	const uint16_t sensor_decimation = sensor_base_rate / sensor_sample_rate;
+
+	for (uint16_t i = 0; i < len; i++) {
+		sensor_descriptors[i].decimation = sensor_decimation;
+	}
+
+	// Write the settings
+	if (mip_3dm_write_message_format(&device, MIP_SENSOR_DATA_DESC_SET, len, sensor_descriptors) != MIP_ACK_OK) {
+		exit_gracefully("ERROR: Could not set sensor message format!");
+		return;
+	}
+}
+
+void CvIns::loadRotation()
+{
+	// TODO: Load the param and setup the euler angles appropriately
 }
 
 void CvIns::initialize_cv7()
@@ -199,33 +244,46 @@ void CvIns::initialize_cv7()
 		return;
 	}
 
-	//
-	//Initialize the MIP interface
-	//
 
 	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(115200) * 1_ms, 250_ms);
 
-	//
-	//Ping the device (note: this is good to do to make sure the device is present)
-	//
 	PX4_INFO("mip_base_ping");
 
 	if (mip_base_ping(&device) != MIP_ACK_OK) {
-		exit_gracefully("Couldn't connect to device");
+		usleep(100_ms);
+
+		if (mip_base_ping(&device) != MIP_ACK_OK) {
+			exit_gracefully("Couldn't connect to device");
+			return;
+		}
 	}
 
 	PX4_INFO("MIP_Size %d", device._max_update_pkts);
 
-	_is_initialized = true;
-
-	//
-	//Idle the device (note: this is good to do during setup)
-	//
 	PX4_INFO("mip_base_set_idle");
 
 	if (mip_base_set_idle(&device) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not set the device to idle!");
+		return;
 	}
+
+	// PX4_INFO("Setting the buad rate to 460800");
+
+	// mip_3dm_write_uart_baudrate(&device,460800);
+	// usleep(300_ms);
+	// serial_port_close(&device_port);
+
+	// serial_port_open(&device_port, "/dev/ttyS2", 460800);
+	// // mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(460800) * 1_ms, 250_ms);
+
+	// PX4_INFO("mip_base_ping");
+
+	// if (mip_base_ping(&device) != MIP_ACK_OK) {
+	// 	exit_gracefully("Couldn't connect to device");
+	// 	return;
+	// }
+
+	// mip_3dm_save_uart_baudrate(&device);
 
 	//
 	//Load the device default settings (so the device is in a known state)
@@ -233,132 +291,63 @@ void CvIns::initialize_cv7()
 
 	if (mip_3dm_default_device_settings(&device) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not load default device settings!");
+		return;
 	}
 
-	//
-	//Setup Sensor data format to XXX Hz
-	//
+	switch (_config._selected_mode) {
+	case mode_imu: {
+			// Scaled Gyro and Accel at a high rate
+			mip_descriptor_rate imu_sensors[4] = {
+				{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, 0x00 },
+				{ MIP_DATA_DESC_SENSOR_GYRO_SCALED,  0x00 },
+				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,   0x00 },
+				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, 0x00}
+			};
+			setSensorRate(imu_sensors, 4, _config._sensor_update_rate_hz);
+		}
+		break;
 
-	uint16_t sensor_base_rate;
+	case mode_ahrs: {
+			//
+			//Setup FILTER data format
+			//
 
-	//Note: Querying the device base rate is only one way to calculate the descriptor decimation.
-	//We could have also set it directly with information from the datasheet (shown in GNSS setup).
+			uint16_t filter_base_rate;
 
-	if (mip_3dm_get_base_rate(&device, MIP_SENSOR_DATA_DESC_SET, &sensor_base_rate) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not get sensor base rate format!");
+			if (mip_3dm_get_base_rate(&device, MIP_FILTER_DATA_DESC_SET, &filter_base_rate) != MIP_ACK_OK) {
+				exit_gracefully("ERROR: Could not get filter base rate format!");
+				return;
+			}
+
+			const uint16_t filter_sample_rate = 10; // Hz
+			const uint16_t filter_decimation = filter_base_rate / filter_sample_rate;
+
+			const mip_descriptor_rate filter_descriptors[3] = {
+				{ MIP_DATA_DESC_SHARED_GPS_TIME,         filter_decimation },
+				{ MIP_DATA_DESC_FILTER_FILTER_STATUS,    filter_decimation },
+				{ MIP_DATA_DESC_FILTER_ATT_EULER_ANGLES, filter_decimation },
+			};
+
+			if (mip_3dm_write_message_format(&device, MIP_FILTER_DATA_DESC_SET, 3, filter_descriptors) != MIP_ACK_OK) {
+				exit_gracefully("ERROR: Could not set filter message format!");
+				return;
+			}
+		}
+		break;
+
+	case mode_ins:
+		break;
+
+	default:
+		break;
 	}
 
-	const uint16_t sensor_sample_rate = 10; // Hz
-	const uint16_t sensor_decimation = sensor_base_rate / sensor_sample_rate;
+	loadRotation();
 
-	const mip_descriptor_rate sensor_descriptors[4] = {
-		{ MIP_DATA_DESC_SHARED_GPS_TIME,     sensor_decimation },
-		{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, sensor_decimation },
-		{ MIP_DATA_DESC_SENSOR_GYRO_SCALED,  sensor_decimation },
-		{ MIP_DATA_DESC_SENSOR_MAG_SCALED,   sensor_decimation },
-	};
-
-	if (mip_3dm_write_message_format(&device, MIP_SENSOR_DATA_DESC_SET, 4, sensor_descriptors) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set sensor message format!");
-	}
-
-
-	//
-	//Setup FILTER data format
-	//
-
-	uint16_t filter_base_rate;
-
-	if (mip_3dm_get_base_rate(&device, MIP_FILTER_DATA_DESC_SET, &filter_base_rate) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not get filter base rate format!");
-	}
-
-	const uint16_t filter_sample_rate = 10; // Hz
-	const uint16_t filter_decimation = filter_base_rate / filter_sample_rate;
-
-	const mip_descriptor_rate filter_descriptors[3] = {
-		{ MIP_DATA_DESC_SHARED_GPS_TIME,         filter_decimation },
-		{ MIP_DATA_DESC_FILTER_FILTER_STATUS,    filter_decimation },
-		{ MIP_DATA_DESC_FILTER_ATT_EULER_ANGLES, filter_decimation },
-	};
-
-	if (mip_3dm_write_message_format(&device, MIP_FILTER_DATA_DESC_SET, 3, filter_descriptors) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set filter message format!");
-	}
-
-
-	//
-	// Setup event triggers/actions on > 45 degrees filter pitch and roll Euler angles
-	// (Note 1: we are reusing the event and action structs, since the settings for pitch/roll are so similar)
-	// (Note 2: we are using the same value for event and action ids.  This is not necessary, but done here for convenience)
-	//
-
-	//EVENTS
-
-	//Roll
-	union mip_3dm_event_trigger_command_parameters event_params;
-	event_params.threshold.type       = MIP_3DM_EVENT_TRIGGER_COMMAND_THRESHOLD_PARAMS_TYPE_WINDOW;
-	event_params.threshold.desc_set   = MIP_FILTER_DATA_DESC_SET;
-	event_params.threshold.field_desc = MIP_DATA_DESC_FILTER_ATT_EULER_ANGLES;
-	event_params.threshold.param_id   = 1;
-	event_params.threshold.high_thres = -0.7853981;
-	event_params.threshold.low_thres  = 0.7853981;
-
-	if (mip_3dm_write_event_trigger(&device, FILTER_ROLL_EVENT_ACTION_ID, MIP_3DM_EVENT_TRIGGER_COMMAND_TYPE_THRESHOLD,
-					&event_params) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set pitch event parameters!");
-	}
-
-	//Pitch
-	event_params.threshold.param_id = 2;
-
-	if (mip_3dm_write_event_trigger(&device, FILTER_PITCH_EVENT_ACTION_ID, MIP_3DM_EVENT_TRIGGER_COMMAND_TYPE_THRESHOLD,
-					&event_params) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set roll event parameters!");
-	}
-
-	//ACTIONS
-
-	//Roll
-	union mip_3dm_event_action_command_parameters event_action;
-	event_action.message.desc_set       = MIP_FILTER_DATA_DESC_SET;
-	event_action.message.num_fields     = 1;
-	event_action.message.descriptors[0] = MIP_DATA_DESC_SHARED_EVENT_SOURCE;
-	event_action.message.decimation     = 0;
-
-	if (mip_3dm_write_event_action(&device, FILTER_ROLL_EVENT_ACTION_ID, FILTER_ROLL_EVENT_ACTION_ID,
-				       MIP_3DM_EVENT_ACTION_COMMAND_TYPE_MESSAGE, &event_action) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set roll action parameters!");
-	}
-
-	//Pitch
-	if (mip_3dm_write_event_action(&device, FILTER_PITCH_EVENT_ACTION_ID, FILTER_PITCH_EVENT_ACTION_ID,
-				       MIP_3DM_EVENT_ACTION_COMMAND_TYPE_MESSAGE, &event_action) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set pitch action parameters!");
-	}
-
-	//ENABLE EVENTS
-
-	//Roll
-	if (mip_3dm_write_event_control(&device, FILTER_ROLL_EVENT_ACTION_ID,
-					MIP_3DM_EVENT_CONTROL_COMMAND_MODE_ENABLED) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not enable roll event!");
-	}
-
-	//Pitch
-	if (mip_3dm_write_event_control(&device, FILTER_PITCH_EVENT_ACTION_ID,
-					MIP_3DM_EVENT_CONTROL_COMMAND_MODE_ENABLED) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not enable pitch event!");
-	}
-
-
-	//
-	//Setup the sensor to vehicle transformation
-	//
-
-	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, sensor_to_vehicle_transformation_euler[0],
-			sensor_to_vehicle_transformation_euler[1], sensor_to_vehicle_transformation_euler[2]) != MIP_ACK_OK) {
+	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, _config.sensor_to_vehicle_transformation_euler[0],
+			_config.sensor_to_vehicle_transformation_euler[1], _config.sensor_to_vehicle_transformation_euler[2]) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not set sensor-to-vehicle transformation!");
+		return;
 	}
 
 
@@ -366,10 +355,15 @@ void CvIns::initialize_cv7()
 	//Setup the filter aiding measurements (GNSS position/velocity)
 	//
 
+#if 0
+
 	if (mip_filter_write_aiding_measurement_enable(&device,
 			MIP_FILTER_AIDING_MEASUREMENT_ENABLE_COMMAND_AIDING_SOURCE_GNSS_POS_VEL, true) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not set filter aiding measurement enable!");
+		return;
 	}
+
+#endif
 
 
 	//
@@ -378,13 +372,14 @@ void CvIns::initialize_cv7()
 
 	if (mip_filter_reset(&device) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not reset the filter!");
+		return;
 	}
 
 
 	//
 	// Register data callbacks
 	//
-
+#if 0
 	//Sensor Data
 	mip_interface_register_extractor(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
 					 MIP_DATA_DESC_SHARED_REFERENCE_TIME,     extract_mip_shared_reference_timestamp_data_from_field,
@@ -397,12 +392,17 @@ void CvIns::initialize_cv7()
 					 MIP_DATA_DESC_SENSOR_GYRO_SCALED,  extract_mip_sensor_scaled_gyro_data_from_field,   &sensor_gyro);
 	mip_interface_register_extractor(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET,
 					 MIP_DATA_DESC_SENSOR_MAG_SCALED,   extract_mip_sensor_scaled_mag_data_from_field,    &sensor_mag);
-
+#else
 	// Register some callbacks.
-	// mip_interface_register_field_callback(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_ACCEL_SCALED, &handleAccel, NULL);
-	// mip_interface_register_field_callback(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_GYRO_SCALED , &handleGyro , NULL);
-	// mip_interface_register_field_callback(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET, MIP_DATA_DESC_SENSOR_MAG_SCALED  , &handleMag  , NULL);
-
+	mip_interface_register_field_callback(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
+					      MIP_DATA_DESC_SENSOR_ACCEL_SCALED, &handleAccel, this);
+	mip_interface_register_field_callback(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET,
+					      MIP_DATA_DESC_SENSOR_GYRO_SCALED, &handleGyro, this);
+	mip_interface_register_field_callback(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET,
+					      MIP_DATA_DESC_SENSOR_MAG_SCALED, &handleMag, this);
+	mip_interface_register_field_callback(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET,
+					      MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, &handleBaro, this);
+#endif
 	//Filter Data
 	mip_interface_register_extractor(&device, &filter_data_handlers[0], MIP_FILTER_DATA_DESC_SET,
 					 MIP_DATA_DESC_FILTER_FILTER_TIMESTAMP, extract_mip_filter_timestamp_data_from_field, &filter_time);
@@ -420,7 +420,10 @@ void CvIns::initialize_cv7()
 
 	if (mip_base_resume(&device) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not resume the device!");
+		return;
 	}
+
+	_is_initialized = true;
 
 }
 #include <byteswap.h>
@@ -435,7 +438,7 @@ void CvIns::service_cv7()
 
 	switch (_state) {
 	case 0:
-		if (hrt_elapsed_time(&_last_print) > 250_ms) {
+		if (hrt_elapsed_time(&_last_print) > 10_s) {
 			_last_print = hrt_absolute_time();
 			PX4_INFO("Waiting for Filter to enter AHRS mode");
 			PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
@@ -457,18 +460,18 @@ void CvIns::service_cv7()
 		break;
 
 	case 1:
-		// if (hrt_elapsed_time(&_last_print) > 250_ms) {
-		// 	_last_print = hrt_absolute_time();
-		// 	PX4_INFO_RAW("Timestamp %llu Sensor Time %llu\n", _last_print, sensor_reference_time.nanoseconds);
-		// 	PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
-		// 		     (double)sensor_accel.scaled_accel[2]);
-		// 	PX4_INFO_RAW("Gyro: %f %f %f\n", (double)sensor_gyro.scaled_gyro[0], (double)sensor_gyro.scaled_gyro[1],
-		// 		     (double)sensor_gyro.scaled_gyro[2]);
-		// 	PX4_INFO_RAW("Mag: %f %f %f\n", (double)sensor_mag.scaled_mag[0], (double)sensor_mag.scaled_mag[1],
-		// 		     (double)sensor_mag.scaled_mag[2]);
-		// 	PX4_INFO_RAW("R: %f P: %f Y: %f\n", (double)filter_euler_angles.roll, (double)filter_euler_angles.pitch,
-		// 		     (double)filter_euler_angles.yaw);
-		// }
+		if (hrt_elapsed_time(&_last_print) > 250_ms) {
+			_last_print = hrt_absolute_time();
+			PX4_INFO_RAW("Timestamp %llu Sensor Time %llu\n", _last_print, sensor_reference_time.nanoseconds);
+			PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
+				     (double)sensor_accel.scaled_accel[2]);
+			PX4_INFO_RAW("Gyro: %f %f %f\n", (double)sensor_gyro.scaled_gyro[0], (double)sensor_gyro.scaled_gyro[1],
+				     (double)sensor_gyro.scaled_gyro[2]);
+			PX4_INFO_RAW("Mag: %f %f %f\n", (double)sensor_mag.scaled_mag[0], (double)sensor_mag.scaled_mag[1],
+				     (double)sensor_mag.scaled_mag[2]);
+			PX4_INFO_RAW("R: %f P: %f Y: %f\n", (double)filter_euler_angles.roll, (double)filter_euler_angles.pitch,
+				     (double)filter_euler_angles.yaw);
+		}
 
 		break;
 
