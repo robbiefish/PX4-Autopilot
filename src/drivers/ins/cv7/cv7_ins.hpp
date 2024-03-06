@@ -53,6 +53,7 @@
 #include <uORB/topics/sensor_accel.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/sensor_baro.h>
+#include <uORB/topics/sensor_selection.h>
 
 
 #include "mip_sdk/src/mip/mip_all.h"
@@ -90,7 +91,7 @@ public:
 
 	bool init();
 
-	void setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len, uint16_t sensor_sample_rate);
+	void setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len);
 
 	void loadRotation();
 
@@ -101,6 +102,7 @@ public:
 		return _logger;
 	}
 
+	hrt_abstime _time_last_valid_imu_us{0};
 private:
 	void Run() override;
 	void initialize_cv7();
@@ -115,7 +117,8 @@ private:
 
 	struct cv7_configuration {
 		enum cv7_mode _selected_mode = mode_imu;
-		uint16_t _sensor_update_rate_hz = 240;
+		uint16_t _sens_imu_update_rate_hz = 250;
+		uint16_t _sens_other_update_rate_hz = 50;
 		enum Rotation _rot = ROTATION_NONE;
 		uint32_t _device_id{0};
 		float sensor_to_vehicle_transformation_euler[3] = {0.0, 0.0, 0.0};
@@ -131,6 +134,7 @@ private:
 
 	// Publications
 	uORB::PublicationMulti<sensor_baro_s> _sensor_baro_pub{ORB_ID(sensor_baro)};
+	uORB::Publication<sensor_selection_s> _sensor_selection_pub{ORB_ID(sensor_selection)};
 
 	// Subscriptions
 	uORB::SubscriptionCallbackWorkItem _sensor_accel_sub{this, ORB_ID(sensor_accel)};        // subscription that schedules CvIns when updated
@@ -148,9 +152,10 @@ private:
 	)
 	LogWriter _logger;
 	bool _armed{false};
-	uint8_t parse_buffer[1024];
+	uint8_t parse_buffer[1512];
 	bool _is_initialized{false};
 	hrt_abstime _last_print{0};
+
 
 
 	/******************************/

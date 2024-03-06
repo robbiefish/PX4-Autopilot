@@ -57,6 +57,7 @@ void CvIns::handleAccel(void *user, const mip_field *field, timestamp_type times
 			  (double)data.scaled_accel[2]);
 		ref->_px4_accel.update(timestamp, data.scaled_accel[0]*CONSTANTS_ONE_G, data.scaled_accel[1]*CONSTANTS_ONE_G,
 				       data.scaled_accel[2]*CONSTANTS_ONE_G);
+		ref->_time_last_valid_imu_us = timestamp;
 	}
 }
 
@@ -69,6 +70,7 @@ void CvIns::handleGyro(void *user, const mip_field *field, timestamp_type timest
 		PX4_DEBUG("Gyro Data:  %f, %f, %f", (double)data.scaled_gyro[0], (double)data.scaled_gyro[1],
 			  (double)data.scaled_gyro[2]);
 		ref->_px4_gyro.update(timestamp, data.scaled_gyro[0], data.scaled_gyro[1], data.scaled_gyro[2]);
+		ref->_time_last_valid_imu_us = timestamp;
 	}
 }
 
@@ -155,9 +157,10 @@ bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint
 
 void CvIns::exit_gracefully(const char *msg)
 {
-	PX4_ERR("%s: Stopping Application", msg);
-	request_stop();
-	ScheduleNow();
+	PX4_ERR("%s: Not Stopping Application", msg);
+	// //Close com port
+	// if(serial_port_is_open(&device_port))
+	// 	serial_port_close(&device_port);
 }
 
 CvIns::CvIns() :
@@ -191,7 +194,7 @@ CvIns::~CvIns()
 #ifdef LOG_TRANSACTIONS
 	_logger.thread_stop();
 #endif
-
+	PX4_INFO("Destructor");
 	perf_free(_loop_perf);
 	perf_free(_loop_interval_perf);
 }
@@ -204,7 +207,7 @@ bool CvIns::init()
 	return true;
 }
 
-void CvIns::setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len, uint16_t sensor_sample_rate)
+void CvIns::setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len)
 {
 	// Get the base rate
 	uint16_t sensor_base_rate;
@@ -214,10 +217,11 @@ void CvIns::setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len,
 		return;
 	}
 
-	// Compute the desired decimation and update all of the sensors in this set
-	const uint16_t sensor_decimation = sensor_base_rate / sensor_sample_rate;
 
 	for (uint16_t i = 0; i < len; i++) {
+		// Compute the desired decimation and update all of the sensors in this set
+		const uint16_t sensor_decimation = sensor_base_rate / sensor_descriptors[i].decimation ;
+
 		sensor_descriptors[i].decimation = sensor_decimation;
 	}
 
@@ -232,20 +236,19 @@ void CvIns::loadRotation()
 {
 	// TODO: Load the param and setup the euler angles appropriately
 }
-
+#define BUAD_RATE 115200
 void CvIns::initialize_cv7()
 {
 	if (_is_initialized) {
 		return;
 	}
 
-	if (!serial_port_open(&device_port, "/dev/ttyS2", 115200)) {
+	if (!serial_port_open(&device_port, "/dev/ttyS2", BUAD_RATE)) {
 		PX4_ERR("ERROR: Could not open device port!");
 		return;
 	}
 
-
-	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(115200) * 1_ms, 250_ms);
+	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(BUAD_RATE) * 1_ms, 250_ms);
 
 	PX4_INFO("mip_base_ping");
 
@@ -260,50 +263,29 @@ void CvIns::initialize_cv7()
 
 	PX4_INFO("MIP_Size %d", device._max_update_pkts);
 
-	PX4_INFO("mip_base_set_idle");
+	// PX4_INFO("mip_base_set_idle");
 
-	if (mip_base_set_idle(&device) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set the device to idle!");
-		return;
-	}
-
-	// PX4_INFO("Setting the buad rate to 460800");
-
-	// mip_3dm_write_uart_baudrate(&device,460800);
-	// usleep(300_ms);
-	// serial_port_close(&device_port);
-
-	// serial_port_open(&device_port, "/dev/ttyS2", 460800);
-	// // mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(460800) * 1_ms, 250_ms);
-
-	// PX4_INFO("mip_base_ping");
-
-	// if (mip_base_ping(&device) != MIP_ACK_OK) {
-	// 	exit_gracefully("Couldn't connect to device");
+	// if (mip_base_set_idle(&device) != MIP_ACK_OK) {
+	// 	exit_gracefully("ERROR: Could not set the device to idle!");
 	// 	return;
 	// }
 
-	// mip_3dm_save_uart_baudrate(&device);
-
-	//
-	//Load the device default settings (so the device is in a known state)
-	//
-
-	if (mip_3dm_default_device_settings(&device) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not load default device settings!");
-		return;
-	}
+	// //Load the device default settings (so the device is in a known state)
+	// if (mip_3dm_default_device_settings(&device) != MIP_ACK_OK) {
+	// 	exit_gracefully("ERROR: Could not load default device settings!");
+	// 	return;
+	// }
 
 	switch (_config._selected_mode) {
 	case mode_imu: {
 			// Scaled Gyro and Accel at a high rate
 			mip_descriptor_rate imu_sensors[4] = {
-				{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, 0x00 },
-				{ MIP_DATA_DESC_SENSOR_GYRO_SCALED,  0x00 },
-				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,   0x00 },
-				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, 0x00}
+				{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, _config._sens_imu_update_rate_hz },
+				{ MIP_DATA_DESC_SENSOR_GYRO_SCALED,  _config._sens_imu_update_rate_hz },
+				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,   _config._sens_other_update_rate_hz },
+				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, _config._sens_other_update_rate_hz}
 			};
-			setSensorRate(imu_sensors, 4, _config._sensor_update_rate_hz);
+			setSensorRate(imu_sensors, 4);
 		}
 		break;
 
@@ -414,6 +396,12 @@ void CvIns::initialize_cv7()
 	mip_interface_register_field_callback(&device, &filter_data_handlers[3], MIP_FILTER_DATA_DESC_SET,
 					      MIP_DATA_DESC_SHARED_EVENT_SOURCE, handle_filter_event_source,  NULL);
 
+
+	if (mip_3dm_write_datastream_control(&device, MIP_3DM_DATASTREAM_CONTROL_COMMAND_ALL_STREAMS, true) != MIP_ACK_OK) {
+		exit_gracefully("ERROR: Could not enable the data stream");
+		return;
+	}
+
 	//
 	//Resume the device
 	//
@@ -431,6 +419,19 @@ void CvIns::initialize_cv7()
 
 void CvIns::service_cv7()
 {
+
+	if (_is_initialized) {
+		if ((_time_last_valid_imu_us != 0) && (hrt_elapsed_time(&_time_last_valid_imu_us) < 3_s)) {
+			// update sensor_selection if configured in INS mode
+			if ((_px4_accel.get_device_id() != 0) && (_px4_gyro.get_device_id() != 0)) {
+				sensor_selection_s sensor_selection{};
+				sensor_selection.accel_device_id = _px4_accel.get_device_id();
+				sensor_selection.gyro_device_id = _px4_gyro.get_device_id();
+				sensor_selection.timestamp = hrt_absolute_time();
+				_sensor_selection_pub.publish(sensor_selection);
+			}
+		}
+	}
 
 	mip_interface_update(&device, false);
 
