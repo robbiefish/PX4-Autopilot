@@ -236,6 +236,35 @@ void CvIns::loadRotation()
 {
 	// TODO: Load the param and setup the euler angles appropriately
 }
+
+int CvIns::connect_at_baud(int32_t baud){
+	// Close
+	if(serial_port_is_open(&device_port)){
+		serial_port_close(&device_port);
+	}
+	PX4_INFO("Attempting to conect at %" PRIu32 " baud", baud);
+
+	if (!serial_port_open(&device_port, "/dev/ttyS2", baud)) {
+		PX4_INFO(" - Failed to open UART");
+		PX4_ERR("ERROR: Could not open device port!");
+		return PX4_ERROR;
+	}
+
+	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(baud) * 1_ms, 250_ms);
+
+	PX4_INFO("mip_base_ping");
+
+	if (mip_base_ping(&device) != MIP_ACK_OK) {
+		usleep(100_ms);
+		if (mip_base_ping(&device) != MIP_ACK_OK) {
+			PX4_INFO(" - Failed to Ping");
+			return PX4_ERROR;
+		}
+	}
+	PX4_INFO("Successfully opened and pinged");
+	return PX4_OK;
+}
+
 #define BUAD_RATE 115200
 void CvIns::initialize_cv7()
 {
@@ -243,32 +272,71 @@ void CvIns::initialize_cv7()
 		return;
 	}
 
-	if (!serial_port_open(&device_port, "/dev/ttyS2", BUAD_RATE)) {
-		PX4_ERR("ERROR: Could not open device port!");
+	// first try default baudrate
+	const uint32_t DEFAULT_BAUDRATE = 115200;
+	const uint32_t DESIRED_BAUDRATE = 460800;
+
+	if(connect_at_baud(DEFAULT_BAUDRATE) == PX4_ERROR){
+		static constexpr uint32_t BAUDRATES[] {9600, 19200, 38400, 57600, 115200, 128000, 230400, 460800, 921600};
+		for (auto &baudrate : BAUDRATES) {
+
+			if(connect_at_baud(DEFAULT_BAUDRATE) == PX4_OK){
+				PX4_INFO("found baudrate %" PRIu32, baudrate);
+				break;
+			}
+		}
+		PX4_WARN("Could not connect to the device, exiting");
 		return;
 	}
 
-	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(BUAD_RATE) * 1_ms, 250_ms);
 
-	PX4_INFO("mip_base_ping");
+	PX4_INFO("mip_base_set_idle");
 
-	if (mip_base_ping(&device) != MIP_ACK_OK) {
-		usleep(100_ms);
+	if (mip_base_set_idle(&device) != MIP_ACK_OK) {
+		exit_gracefully("ERROR: Could not set the device to idle!");
+		return;
+	}
 
-		if (mip_base_ping(&device) != MIP_ACK_OK) {
-			exit_gracefully("Couldn't connect to device");
+	PX4_INFO("Setting to default device settings");
+
+	//Load the device default settings (so the device is in a known state)
+	if (mip_3dm_default_device_settings(&device) != MIP_ACK_OK) {
+		exit_gracefully("ERROR: Could not load default device settings!");
+		return;
+	}
+
+	PX4_INFO("Connecting at default baudrate");
+
+	if(connect_at_baud(DEFAULT_BAUDRATE) == PX4_ERROR){
+		exit_gracefully("ERROR: Could not reconnect at expected baud!");
+		return;
+	}
+
+	PX4_INFO("Setting the baud to desired baud rate");
+
+	usleep(500_ms);
+
+	if(mip_3dm_write_uart_baudrate(&device, DESIRED_BAUDRATE) != MIP_ACK_OK){
+		exit_gracefully("ERROR: Could not set the baudrate!");
+		return;
+	}
+
+	tcflush(device_port.handle, TCIOFLUSH);
+
+	usleep(500_ms);
+
+	for(int i=0;i<10;i++){
+		PX4_INFO("Connection Attempt:");
+		if(connect_at_baud(DESIRED_BAUDRATE) == PX4_OK){
+			break;
+		}
+		if(i >= 9){
+			exit_gracefully("ERROR: Could not reconnect at desired baud!");
 			return;
 		}
 	}
 
-	PX4_INFO("MIP_Size %d", device._max_update_pkts);
 
-	// PX4_INFO("mip_base_set_idle");
-
-	// if (mip_base_set_idle(&device) != MIP_ACK_OK) {
-	// 	exit_gracefully("ERROR: Could not set the device to idle!");
-	// 	return;
-	// }
 
 	// //Load the device default settings (so the device is in a known state)
 	// if (mip_3dm_default_device_settings(&device) != MIP_ACK_OK) {

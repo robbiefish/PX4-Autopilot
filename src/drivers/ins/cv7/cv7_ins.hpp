@@ -95,6 +95,8 @@ public:
 
 	void loadRotation();
 
+	int connect_at_baud(int32_t baud);
+
 	int print_status() override;
 
 	LogWriter &get_logger()
@@ -117,7 +119,7 @@ private:
 
 	struct cv7_configuration {
 		enum cv7_mode _selected_mode = mode_imu;
-		uint16_t _sens_imu_update_rate_hz = 250;
+		uint16_t _sens_imu_update_rate_hz = 500;
 		uint16_t _sens_other_update_rate_hz = 50;
 		enum Rotation _rot = ROTATION_NONE;
 		uint32_t _device_id{0};
