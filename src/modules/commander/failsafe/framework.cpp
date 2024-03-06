@@ -162,7 +162,7 @@ void FailsafeBase::removeActions(ClearCondition condition)
 		ActionOptions &cur_action = _actions[action_idx];
 
 		if (cur_action.valid() && !cur_action.state_failure && cur_action.clear_condition == condition) {
-			PX4_DEBUG("Caller %i: clear condition triggered, removing", cur_action.id);
+			PX4_DEBUG("%" PRIu64 ": Caller %i: clear condition triggered, removing", _last_update, cur_action.id);
 			cur_action.setInvalid();
 		}
 	}
@@ -171,7 +171,8 @@ void FailsafeBase::removeActions(ClearCondition condition)
 void FailsafeBase::notifyUser(uint8_t user_intended_mode, Action action, Action delayed_action, Cause cause)
 {
 	int delay_s = (_current_delay + 500_ms) / 1_s;
-	PX4_DEBUG("User notification: failsafe triggered (action=%i, delayed_action=%i, cause=%i, delay=%is)", (int)action,
+	PX4_DEBUG("%" PRIu64 ": User notification: failsafe triggered (action=%i, delayed_action=%i, cause=%i, delay=%is)",
+		  _last_update, (int)action,
 		  (int)delayed_action, (int)cause, delay_s);
 
 #ifdef EMSCRIPTEN_BUILD
@@ -306,7 +307,7 @@ bool FailsafeBase::checkFailsafe(int caller_id, bool last_state_failure, bool cu
 			_actions[found_idx].action = options.action; // Allow action to be updated, but keep the rest
 
 			if (!last_state_failure) {
-				PX4_DEBUG("Caller %i: state changed to failed, action already active", caller_id);
+				PX4_DEBUG("%" PRIu64 ": Caller %i: state changed to failed, action already active", _last_update, caller_id);
 			}
 
 		} else {
@@ -348,7 +349,7 @@ bool FailsafeBase::checkFailsafe(int caller_id, bool last_state_failure, bool cu
 					_user_takeover_active = false; // Clear takeover
 				}
 
-				PX4_DEBUG("Caller %i: state changed to failed, adding action", caller_id);
+				PX4_DEBUG("%" PRIu64 ": Caller %i: state changed to failed, adding action", _last_update, caller_id);
 			}
 		}
 
@@ -377,12 +378,12 @@ void FailsafeBase::removeAction(ActionOptions &action) const
 {
 	if (action.clear_condition == ClearCondition::WhenConditionClears) {
 		// Remove action
-		PX4_DEBUG("Caller %i: state changed to valid, removing action", action.id);
+		PX4_DEBUG("%" PRIu64 ": Caller %i: state changed to valid, removing action", _last_update, action.id);
 		action.setInvalid();
 
 	} else {
 		if (action.state_failure) {
-			PX4_DEBUG("Caller %i: state changed to valid, keeping action", action.id);
+			PX4_DEBUG("%" PRIu64 ": Caller %i: state changed to valid, keeping action", _last_update, action.id);
 		}
 
 		// Keep action, just flag the state
@@ -399,7 +400,7 @@ void FailsafeBase::removeNonActivatedActions()
 
 		if (cur_action.valid() && !cur_action.activated) {
 			if (_actions[action_idx].state_failure) {
-				PX4_DEBUG("Caller %i: action not activated", cur_action.id);
+				PX4_DEBUG("%" PRIu64 ": Caller %i: action not activated", _last_update, cur_action.id);
 			}
 
 			removeAction(cur_action);
@@ -606,7 +607,7 @@ void FailsafeBase::clearDelayIfNeeded(const State &state,
 	if (_selected_action > Action::Hold || !modeCanRun(status_flags, vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER)
 	    || _user_takeover_active) {
 		if (_current_delay > 0) {
-			PX4_DEBUG("Clearing delay, Hold not available, already in failsafe or taken over");
+			PX4_DEBUG("%" PRIu64 ": Clearing delay, Hold not available, already in failsafe or taken over", _last_update);
 		}
 
 		_current_delay = 0;
