@@ -55,7 +55,9 @@ void CvIns::handleAccel(void *user, const mip_field *field, timestamp_type times
 	if (extract_mip_sensor_scaled_accel_data_from_field(field, &data)) {
 		PX4_DEBUG("Accel Data: %f %f %f", (double)data.scaled_accel[0], (double)data.scaled_accel[1],
 			  (double)data.scaled_accel[2]);
-		ref->_px4_accel.update(timestamp, data.scaled_accel[0]*CONSTANTS_ONE_G, data.scaled_accel[1]*CONSTANTS_ONE_G,
+
+		// Pass in "now" as the current timestamp_sample value
+		ref->_px4_accel.update(hrt_absolute_time(), data.scaled_accel[0]*CONSTANTS_ONE_G, data.scaled_accel[1]*CONSTANTS_ONE_G,
 				       data.scaled_accel[2]*CONSTANTS_ONE_G);
 		ref->_time_last_valid_imu_us = timestamp;
 	}
@@ -69,7 +71,7 @@ void CvIns::handleGyro(void *user, const mip_field *field, timestamp_type timest
 	if (extract_mip_sensor_scaled_gyro_data_from_field(field, &data)) {
 		PX4_DEBUG("Gyro Data:  %f, %f, %f", (double)data.scaled_gyro[0], (double)data.scaled_gyro[1],
 			  (double)data.scaled_gyro[2]);
-		ref->_px4_gyro.update(timestamp, data.scaled_gyro[0], data.scaled_gyro[1], data.scaled_gyro[2]);
+		ref->_px4_gyro.update(hrt_absolute_time(), data.scaled_gyro[0], data.scaled_gyro[1], data.scaled_gyro[2]);
 		ref->_time_last_valid_imu_us = timestamp;
 	}
 }
@@ -81,7 +83,7 @@ void CvIns::handleMag(void *user, const mip_field *field, timestamp_type timesta
 
 	if (extract_mip_sensor_scaled_mag_data_from_field(field, &data)) {
 		PX4_DEBUG("Mag Data:   %f, %f, %f", (double)data.scaled_mag[0], (double)data.scaled_mag[1], (double)data.scaled_mag[2]);
-		ref->_px4_mag.update(timestamp, data.scaled_mag[0], data.scaled_mag[1], data.scaled_mag[2]);
+		ref->_px4_mag.update(hrt_absolute_time(), data.scaled_mag[0], data.scaled_mag[1], data.scaled_mag[2]);
 	}
 }
 
@@ -92,8 +94,8 @@ void CvIns::handleBaro(void *user, const mip_field *field, timestamp_type timest
 
 	if (extract_mip_sensor_scaled_pressure_data_from_field(field, &data)) {
 		PX4_DEBUG("Baro Data:   %f", (double)data.scaled_pressure);
-		ref->_sensor_baro.timestamp = timestamp;
-		ref->_sensor_baro.timestamp_sample = timestamp;
+		ref->_sensor_baro.timestamp = hrt_absolute_time();
+		ref->_sensor_baro.timestamp_sample = hrt_absolute_time();
 		ref->_sensor_baro.pressure = data.scaled_pressure * 100.f; // convert [Pa] to [mBar]
 		ref->_sensor_baro_pub.publish(ref->_sensor_baro);
 	}
@@ -163,17 +165,19 @@ void CvIns::exit_gracefully(const char *msg)
 	// 	serial_port_close(&device_port);
 }
 
-CvIns::CvIns() :
+CvIns::CvIns(const char* uart_port, int32_t rot) :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::test1)
 {
-	loadRotation();
+	_uart_device = uart_port;
+	_config._rot = static_cast<Rotation>(rot);
 
 	device::Device::DeviceId device_id{};
 	device_id.devid_s.devtype = DRV_INS_DEVTYPE_3DMCV7;
 	device_id.devid_s.bus_type = device::Device::DeviceBusType_SERIAL;
 	device_id.devid_s.bus = 2;
 	_config._device_id = device_id.devid;
+	// Default to ROTATION_NONE
 	_px4_accel.set_device_id(_config._device_id);
 	_px4_gyro.set_device_id(_config._device_id);
 	_px4_mag.set_device_id(_config._device_id);
@@ -202,7 +206,7 @@ CvIns::~CvIns()
 bool CvIns::init()
 {
 	// Run on fixed interval
-	ScheduleOnInterval(1250_us); // 800 Hz
+	ScheduleOnInterval(1000_us); // 1000 Hz
 
 	return true;
 }
@@ -232,11 +236,6 @@ void CvIns::setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len)
 	}
 }
 
-void CvIns::loadRotation()
-{
-	// TODO: Load the param and setup the euler angles appropriately
-}
-
 int CvIns::connect_at_baud(int32_t baud){
 	// Close
 	if(serial_port_is_open(&device_port)){
@@ -244,7 +243,7 @@ int CvIns::connect_at_baud(int32_t baud){
 	}
 	PX4_INFO("Attempting to conect at %" PRIu32 " baud", baud);
 
-	if (!serial_port_open(&device_port, "/dev/ttyS2", baud)) {
+	if (!serial_port_open(&device_port, _uart_device, baud)) {
 		PX4_INFO(" - Failed to open UART");
 		PX4_ERR("ERROR: Could not open device port!");
 		return PX4_ERROR;
@@ -354,6 +353,7 @@ void CvIns::initialize_cv7()
 				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, _config._sens_other_update_rate_hz}
 			};
 			setSensorRate(imu_sensors, 4);
+
 		}
 		break;
 
@@ -392,14 +392,10 @@ void CvIns::initialize_cv7()
 		break;
 	}
 
-	loadRotation();
-
-	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, _config.sensor_to_vehicle_transformation_euler[0],
-			_config.sensor_to_vehicle_transformation_euler[1], _config.sensor_to_vehicle_transformation_euler[2]) != MIP_ACK_OK) {
+	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, rot_lookup[_config._rot].roll,rot_lookup[_config._rot].pitch,rot_lookup[_config._rot].yaw) != MIP_ACK_OK) {
 		exit_gracefully("ERROR: Could not set sensor-to-vehicle transformation!");
 		return;
 	}
-
 
 	//
 	//Setup the filter aiding measurements (GNSS position/velocity)
@@ -593,7 +589,36 @@ void CvIns::Run()
 
 int CvIns::task_spawn(int argc, char *argv[])
 {
-	CvIns *instance = new CvIns();
+	int ch;
+	int myoptind = 1;
+	const char *myoptarg = nullptr;
+
+	const char *dev = "/dev/ttyS2";
+	int32_t rot = ROTATION_NONE;
+
+	while ((ch = px4_getopt(argc, argv, "d:r:", &myoptind, &myoptarg)) != EOF) {
+		switch (ch) {
+		case 'd':
+			dev = myoptarg;
+			break;
+		case 'r':
+			rot = atoi(myoptarg);
+			if(rot >= ROTATION_MAX){
+				rot = ROTATION_NONE;
+			}
+			break;
+		}
+	}
+
+	if (dev == nullptr || strlen(dev) == 0) {
+		print_usage("no device specified");
+		_object.store(nullptr);
+		_task_id = -1;
+
+		return PX4_ERROR;
+	}
+
+	CvIns *instance = new CvIns(dev, rot);
 
 	if (instance) {
 		_object.store(instance);
@@ -646,6 +671,8 @@ Example of a simple module running out of a work queue.
 	PRINT_MODULE_USAGE_NAME("cv7_ins", "template");
 	PRINT_MODULE_USAGE_COMMAND("start");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
+	PRINT_MODULE_USAGE_PARAM_STRING('d', "/dev/ttyS2", "<file:dev>", "CV7 Port", true);
+	PRINT_MODULE_USAGE_PARAM_INT('r', 0, 0, ROTATION_MAX, "See enum Rotation for values", true);
 
 	return 0;
 }

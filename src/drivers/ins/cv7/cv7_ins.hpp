@@ -71,7 +71,7 @@ using namespace time_literals;
 class CvIns : public ModuleBase<CvIns>, public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
-	CvIns();
+	CvIns(const char* device, int32_t rotation);
 	~CvIns() override;
 
 	static void handleAccel(void *user, const mip_field *field, timestamp_type timestamp);
@@ -92,8 +92,6 @@ public:
 	bool init();
 
 	void setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len);
-
-	void loadRotation();
 
 	int connect_at_baud(int32_t baud);
 
@@ -123,7 +121,6 @@ private:
 		uint16_t _sens_other_update_rate_hz = 50;
 		enum Rotation _rot = ROTATION_NONE;
 		uint32_t _device_id{0};
-		float sensor_to_vehicle_transformation_euler[3] = {0.0, 0.0, 0.0};
 	};
 
 	cv7_configuration _config;
@@ -181,5 +178,6 @@ private:
 	mip_filter_euler_angles_data  filter_euler_angles;
 
 	bool filter_state_ahrs = false;
+	const char *_uart_device;
 
 };
