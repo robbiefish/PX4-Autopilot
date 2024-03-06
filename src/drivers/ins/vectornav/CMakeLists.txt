@@ -42,7 +42,6 @@ px4_add_module(
 	SRCS
 		VectorNav.cpp
 		VectorNav.hpp
-		LogWriter.hpp
 	MODULE_CONFIG
 		module.yaml
 	DEPENDS

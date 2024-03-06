@@ -15,7 +15,6 @@ exec find boards msg src platforms test \
     -path src/drivers/uavcan/libuavcan -prune -o \
     -path src/drivers/uavcan/uavcan_drivers/kinetis/driver/include/uavcan_kinetis -prune -o \
     -path src/drivers/cyphal/libcanard -prune -o \
-    -path src/examples/work_item/mip_sdk -prune -o \
     -path src/lib/crypto/monocypher -prune -o \
     -path src/lib/events/libevents -prune -o \
     -path src/lib/parameters/uthash -prune -o \
@@ -24,7 +23,6 @@ exec find boards msg src platforms test \
     -path src/modules/gyro_fft/CMSIS_5 -prune -o \
     -path src/modules/mavlink/mavlink -prune -o \
     -path test/mavsdk_tests/catch2 -prune -o \
-    -path src/drivers/ins/cv7/mip_sdk -prune -o \
     -path src/lib/crypto/monocypher -prune -o \
     -path src/lib/crypto/libtomcrypt -prune -o \
     -path src/lib/crypto/libtommath -prune -o \
