@@ -157,15 +157,7 @@ bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint
 	return serial_port_write(&device_port, data, length, &bytes_written);
 }
 
-void CvIns::exit_gracefully(const char *msg)
-{
-	PX4_ERR("%s: Not Stopping Application", msg);
-	// //Close com port
-	// if(serial_port_is_open(&device_port))
-	// 	serial_port_close(&device_port);
-}
-
-CvIns::CvIns(const char* uart_port, int32_t rot) :
+CvIns::CvIns(const char *uart_port, int32_t rot) :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::test1)
 {
@@ -211,13 +203,13 @@ bool CvIns::init()
 	return true;
 }
 
-void CvIns::setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len)
+void CvIns::set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t len)
 {
 	// Get the base rate
 	uint16_t sensor_base_rate;
 
 	if (mip_3dm_get_base_rate(&device, MIP_SENSOR_DATA_DESC_SET, &sensor_base_rate) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not get sensor base rate format!");
+		PX4_ERR("ERROR: Could not get sensor base rate format!");
 		return;
 	}
 
@@ -231,16 +223,18 @@ void CvIns::setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len)
 
 	// Write the settings
 	if (mip_3dm_write_message_format(&device, MIP_SENSOR_DATA_DESC_SET, len, sensor_descriptors) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set sensor message format!");
+		PX4_ERR("ERROR: Could not set sensor message format!");
 		return;
 	}
 }
 
-int CvIns::connect_at_baud(int32_t baud){
+int CvIns::connect_at_baud(int32_t baud)
+{
 	// Close
-	if(serial_port_is_open(&device_port)){
+	if (serial_port_is_open(&device_port)) {
 		serial_port_close(&device_port);
 	}
+
 	PX4_INFO("Attempting to conect at %" PRIu32 " baud", baud);
 
 	if (!serial_port_open(&device_port, _uart_device, baud)) {
@@ -255,11 +249,13 @@ int CvIns::connect_at_baud(int32_t baud){
 
 	if (mip_base_ping(&device) != MIP_ACK_OK) {
 		usleep(100_ms);
+
 		if (mip_base_ping(&device) != MIP_ACK_OK) {
 			PX4_INFO(" - Failed to Ping");
 			return PX4_ERROR;
 		}
 	}
+
 	PX4_INFO("Successfully opened and pinged");
 	return PX4_OK;
 }
@@ -275,15 +271,17 @@ void CvIns::initialize_cv7()
 	const uint32_t DEFAULT_BAUDRATE = 115200;
 	const uint32_t DESIRED_BAUDRATE = 460800;
 
-	if(connect_at_baud(DEFAULT_BAUDRATE) == PX4_ERROR){
+	if (connect_at_baud(DEFAULT_BAUDRATE) == PX4_ERROR) {
 		static constexpr uint32_t BAUDRATES[] {9600, 19200, 38400, 57600, 115200, 128000, 230400, 460800, 921600};
+
 		for (auto &baudrate : BAUDRATES) {
 
-			if(connect_at_baud(DEFAULT_BAUDRATE) == PX4_OK){
+			if (connect_at_baud(DEFAULT_BAUDRATE) == PX4_OK) {
 				PX4_INFO("found baudrate %" PRIu32, baudrate);
 				break;
 			}
 		}
+
 		PX4_WARN("Could not connect to the device, exiting");
 		return;
 	}
@@ -292,7 +290,7 @@ void CvIns::initialize_cv7()
 	PX4_INFO("mip_base_set_idle");
 
 	if (mip_base_set_idle(&device) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set the device to idle!");
+		PX4_ERR("ERROR: Could not set the device to idle!");
 		return;
 	}
 
@@ -300,14 +298,14 @@ void CvIns::initialize_cv7()
 
 	//Load the device default settings (so the device is in a known state)
 	if (mip_3dm_default_device_settings(&device) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not load default device settings!");
+		PX4_ERR("ERROR: Could not load default device settings!");
 		return;
 	}
 
 	PX4_INFO("Connecting at default baudrate");
 
-	if(connect_at_baud(DEFAULT_BAUDRATE) == PX4_ERROR){
-		exit_gracefully("ERROR: Could not reconnect at expected baud!");
+	if (connect_at_baud(DEFAULT_BAUDRATE) == PX4_ERROR) {
+		PX4_ERR("ERROR: Could not reconnect at expected baud!");
 		return;
 	}
 
@@ -315,8 +313,8 @@ void CvIns::initialize_cv7()
 
 	usleep(500_ms);
 
-	if(mip_3dm_write_uart_baudrate(&device, DESIRED_BAUDRATE) != MIP_ACK_OK){
-		exit_gracefully("ERROR: Could not set the baudrate!");
+	if (mip_3dm_write_uart_baudrate(&device, DESIRED_BAUDRATE) != MIP_ACK_OK) {
+		PX4_ERR("ERROR: Could not set the baudrate!");
 		return;
 	}
 
@@ -324,24 +322,18 @@ void CvIns::initialize_cv7()
 
 	usleep(500_ms);
 
-	for(int i=0;i<10;i++){
-		PX4_INFO("Connection Attempt:");
-		if(connect_at_baud(DESIRED_BAUDRATE) == PX4_OK){
+	for (int i = 0; i < 10; i++) {
+		PX4_INFO("Connection Attempt: %d", i);
+
+		if (connect_at_baud(DESIRED_BAUDRATE) == PX4_OK) {
 			break;
 		}
-		if(i >= 9){
-			exit_gracefully("ERROR: Could not reconnect at desired baud!");
+
+		if (i >= 9) {
+			PX4_ERR("ERROR: Could not reconnect at desired baud!");
 			return;
 		}
 	}
-
-
-
-	// //Load the device default settings (so the device is in a known state)
-	// if (mip_3dm_default_device_settings(&device) != MIP_ACK_OK) {
-	// 	exit_gracefully("ERROR: Could not load default device settings!");
-	// 	return;
-	// }
 
 	switch (_config._selected_mode) {
 	case mode_imu: {
@@ -352,7 +344,7 @@ void CvIns::initialize_cv7()
 				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,   _config._sens_other_update_rate_hz },
 				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, _config._sens_other_update_rate_hz}
 			};
-			setSensorRate(imu_sensors, 4);
+			set_sensor_rate(imu_sensors, 4);
 
 		}
 		break;
@@ -365,7 +357,7 @@ void CvIns::initialize_cv7()
 			uint16_t filter_base_rate;
 
 			if (mip_3dm_get_base_rate(&device, MIP_FILTER_DATA_DESC_SET, &filter_base_rate) != MIP_ACK_OK) {
-				exit_gracefully("ERROR: Could not get filter base rate format!");
+				PX4_ERR("ERROR: Could not get filter base rate format!");
 				return;
 			}
 
@@ -379,7 +371,7 @@ void CvIns::initialize_cv7()
 			};
 
 			if (mip_3dm_write_message_format(&device, MIP_FILTER_DATA_DESC_SET, 3, filter_descriptors) != MIP_ACK_OK) {
-				exit_gracefully("ERROR: Could not set filter message format!");
+				PX4_ERR("ERROR: Could not set filter message format!");
 				return;
 			}
 		}
@@ -392,8 +384,9 @@ void CvIns::initialize_cv7()
 		break;
 	}
 
-	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, rot_lookup[_config._rot].roll,rot_lookup[_config._rot].pitch,rot_lookup[_config._rot].yaw) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set sensor-to-vehicle transformation!");
+	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, rot_lookup[_config._rot].roll,
+			rot_lookup[_config._rot].pitch, rot_lookup[_config._rot].yaw) != MIP_ACK_OK) {
+		PX4_ERR("ERROR: Could not set sensor-to-vehicle transformation!");
 		return;
 	}
 
@@ -405,7 +398,7 @@ void CvIns::initialize_cv7()
 
 	if (mip_filter_write_aiding_measurement_enable(&device,
 			MIP_FILTER_AIDING_MEASUREMENT_ENABLE_COMMAND_AIDING_SOURCE_GNSS_POS_VEL, true) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not set filter aiding measurement enable!");
+		PX4_ERR("ERROR: Could not set filter aiding measurement enable!");
 		return;
 	}
 
@@ -417,7 +410,7 @@ void CvIns::initialize_cv7()
 	//
 
 	if (mip_filter_reset(&device) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not reset the filter!");
+		PX4_ERR("ERROR: Could not reset the filter!");
 		return;
 	}
 
@@ -439,7 +432,7 @@ void CvIns::initialize_cv7()
 	mip_interface_register_extractor(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET,
 					 MIP_DATA_DESC_SENSOR_MAG_SCALED,   extract_mip_sensor_scaled_mag_data_from_field,    &sensor_mag);
 #else
-	// Register some callbacks.
+	// TODO: Move into an IMU specific setup
 	mip_interface_register_field_callback(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
 					      MIP_DATA_DESC_SENSOR_ACCEL_SCALED, &handleAccel, this);
 	mip_interface_register_field_callback(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET,
@@ -449,20 +442,20 @@ void CvIns::initialize_cv7()
 	mip_interface_register_field_callback(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET,
 					      MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, &handleBaro, this);
 #endif
-	//Filter Data
+	// TODO: Move into an AHRS specific setup
+	// Filter Data
 	mip_interface_register_extractor(&device, &filter_data_handlers[0], MIP_FILTER_DATA_DESC_SET,
 					 MIP_DATA_DESC_FILTER_FILTER_TIMESTAMP, extract_mip_filter_timestamp_data_from_field, &filter_time);
 	mip_interface_register_extractor(&device, &filter_data_handlers[1], MIP_FILTER_DATA_DESC_SET,
 					 MIP_DATA_DESC_FILTER_FILTER_STATUS,    extract_mip_filter_status_data_from_field,        &filter_status);
 	mip_interface_register_extractor(&device, &filter_data_handlers[2], MIP_FILTER_DATA_DESC_SET,
 					 MIP_DATA_DESC_FILTER_ATT_EULER_ANGLES, extract_mip_filter_euler_angles_data_from_field,  &filter_euler_angles);
-
 	mip_interface_register_field_callback(&device, &filter_data_handlers[3], MIP_FILTER_DATA_DESC_SET,
 					      MIP_DATA_DESC_SHARED_EVENT_SOURCE, handle_filter_event_source,  NULL);
 
 
 	if (mip_3dm_write_datastream_control(&device, MIP_3DM_DATASTREAM_CONTROL_COMMAND_ALL_STREAMS, true) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not enable the data stream");
+		PX4_ERR("ERROR: Could not enable the data stream");
 		return;
 	}
 
@@ -471,15 +464,13 @@ void CvIns::initialize_cv7()
 	//
 
 	if (mip_base_resume(&device) != MIP_ACK_OK) {
-		exit_gracefully("ERROR: Could not resume the device!");
+		PX4_ERR("ERROR: Could not resume the device!");
 		return;
 	}
 
 	_is_initialized = true;
 
 }
-#include <byteswap.h>
-
 
 void CvIns::service_cv7()
 {
@@ -499,8 +490,7 @@ void CvIns::service_cv7()
 
 	mip_interface_update(&device, false);
 
-	// write_logs();
-
+	// Debug to verify that mode switching happens (without streams of messages)
 	switch (_state) {
 	case 0:
 		if (hrt_elapsed_time(&_last_print) > 10_s) {
@@ -508,13 +498,6 @@ void CvIns::service_cv7()
 			PX4_INFO("Waiting for Filter to enter AHRS mode");
 			PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
 				     (double)sensor_accel.scaled_accel[2]);
-
-			float x = bswap_32(sensor_accel.scaled_accel[0]);
-			float y = bswap_32(sensor_accel.scaled_accel[1]);
-			float z = bswap_32(sensor_accel.scaled_accel[2]);
-
-			PX4_INFO_RAW("Accel: %f %f %f\n", (double)x, (double)y,	(double)z);
-
 		}
 
 		if (filter_status.filter_state == MIP_FILTER_MODE_AHRS) {
@@ -601,11 +584,14 @@ int CvIns::task_spawn(int argc, char *argv[])
 		case 'd':
 			dev = myoptarg;
 			break;
+
 		case 'r':
 			rot = atoi(myoptarg);
-			if(rot >= ROTATION_MAX){
+
+			if (rot >= ROTATION_MAX) {
 				rot = ROTATION_NONE;
 			}
+
 			break;
 		}
 	}

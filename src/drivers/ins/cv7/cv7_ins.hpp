@@ -71,14 +71,13 @@ using namespace time_literals;
 class CvIns : public ModuleBase<CvIns>, public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
-	CvIns(const char* device, int32_t rotation);
+	CvIns(const char *device, int32_t rotation);
 	~CvIns() override;
 
 	static void handleAccel(void *user, const mip_field *field, timestamp_type timestamp);
 	static void handleGyro(void *user, const mip_field *field, timestamp_type timestamp);
 	static void handleMag(void *user, const mip_field *field, timestamp_type timestamp);
 	static void handleBaro(void *user, const mip_field *field, timestamp_type timestamp);
-	void exit_gracefully(const char *msg);
 
 	/** @see ModuleBase */
 	static int task_spawn(int argc, char *argv[]);
@@ -91,7 +90,7 @@ public:
 
 	bool init();
 
-	void setSensorRate(mip_descriptor_rate *sensor_descriptors, uint16_t len);
+	void set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t len);
 
 	int connect_at_baud(int32_t baud);
 
@@ -173,7 +172,7 @@ private:
 	mip_sensor_scaled_gyro_data   sensor_gyro{0};
 	mip_sensor_scaled_mag_data    sensor_mag{0};
 
-	mip_filter_timestamp_data filter_time;
+	mip_filter_timestamp_data     filter_time;
 	mip_filter_status_data        filter_status;
 	mip_filter_euler_angles_data  filter_euler_angles;
 
