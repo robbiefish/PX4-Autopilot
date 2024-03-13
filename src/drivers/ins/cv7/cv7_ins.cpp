@@ -440,8 +440,8 @@ void CvIns::initialize_cv7()
 		break;
 	}
 
-	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, rot_lookup[_config._rot].roll,
-			rot_lookup[_config._rot].pitch, rot_lookup[_config._rot].yaw) != MIP_ACK_OK) {
+	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, math::radians<float>(rot_lookup[_config._rot].roll),
+			math::radians<float>(rot_lookup[_config._rot].pitch), math::radians<float>(rot_lookup[_config._rot].yaw)) != MIP_ACK_OK) {
 		PX4_ERR("ERROR: Could not set sensor-to-vehicle transformation!");
 		return;
 	}
