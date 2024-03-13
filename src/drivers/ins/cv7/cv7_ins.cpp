@@ -46,7 +46,6 @@ serial_port device_port;
 const uint8_t FILTER_ROLL_EVENT_ACTION_ID  = 1;
 const uint8_t FILTER_PITCH_EVENT_ACTION_ID = 2;
 
-
 void CvIns::handleAccel(void *user, const mip_field *field, timestamp_type timestamp)
 {
 	CvIns *ref = static_cast<CvIns *>(user);
@@ -144,7 +143,7 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 
 bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint8_t *data, size_t length)
 {
-	size_t bytes_written;
+	size_t bytes_written{0};
 
 #ifdef LOG_TRANSACTIONS
 
@@ -230,6 +229,27 @@ void CvIns::set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t le
 
 int CvIns::connect_at_baud(int32_t baud)
 {
+	// TODO: Test these changes
+	//#define CHANGE_UART_BAUD_WITHOUT_CLOSE
+	static bool mip_init = false;
+	#ifdef CHANGE_UART_BAUD_WITHOUT_CLOSE
+
+	if(_serial.is_open()){
+		if(_serial.uart_get_baud() != baud){
+			if(_serial.uart_set_baud(baud) == -1){
+				PX4_ERR("Could not change baud to %" PRIu32 " baud", baud);
+			} else {
+				PX4_INFO("Changed baud to %" PRIu32 " baud", baud);
+			}
+		}
+	} else if(_serial.uart_open(_uart_device, baud) == -1){
+		PX4_INFO(" - Failed to open UART");
+		PX4_ERR("ERROR: Could not open device port!");
+		return PX4_ERROR;
+	}
+	PX4_INFO("Serial Port %s with baud of %" PRIu32 " baud", (_serial.is_open()?"CONNECTED":"NOT CONNECTED"), baud);
+	#else
+
 	// Close
 	if (serial_port_is_open(&device_port)) {
 		serial_port_close(&device_port);
@@ -242,16 +262,20 @@ int CvIns::connect_at_baud(int32_t baud)
 		PX4_ERR("ERROR: Could not open device port!");
 		return PX4_ERROR;
 	}
-
-	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(baud) * 1_ms, 250_ms);
+	#endif
+	if(!mip_init){
+		mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(baud) * 1_ms, 250_ms);
+		mip_init = false;
+	}
 
 	PX4_INFO("mip_base_ping");
 
 	if (mip_base_ping(&device) != MIP_ACK_OK) {
-		usleep(100_ms);
+		PX4_INFO(" - Failed to Ping 1");
+		usleep(200_ms);
 
 		if (mip_base_ping(&device) != MIP_ACK_OK) {
-			PX4_INFO(" - Failed to Ping");
+			PX4_INFO(" - Failed to Ping 2");
 			return PX4_ERROR;
 		}
 	}
@@ -260,7 +284,6 @@ int CvIns::connect_at_baud(int32_t baud)
 	return PX4_OK;
 }
 
-#define BUAD_RATE 115200
 void CvIns::initialize_cv7()
 {
 	if (_is_initialized) {
@@ -272,18 +295,22 @@ void CvIns::initialize_cv7()
 	const uint32_t DESIRED_BAUDRATE = 460800;
 
 	if (connect_at_baud(DEFAULT_BAUDRATE) == PX4_ERROR) {
+
 		static constexpr uint32_t BAUDRATES[] {9600, 19200, 38400, 57600, 115200, 128000, 230400, 460800, 921600};
+		bool is_connected = false;
 
 		for (auto &baudrate : BAUDRATES) {
 
-			if (connect_at_baud(DEFAULT_BAUDRATE) == PX4_OK) {
+			if (connect_at_baud(baudrate) == PX4_OK) {
 				PX4_INFO("found baudrate %" PRIu32, baudrate);
+				is_connected = true;
 				break;
 			}
 		}
-
-		PX4_WARN("Could not connect to the device, exiting");
-		return;
+		if(!is_connected){
+			PX4_WARN("Could not connect to the device, exiting");
+			return;
+		}
 	}
 
 
@@ -630,7 +657,7 @@ int CvIns::task_spawn(int argc, char *argv[])
 
 int CvIns::print_status()
 {
-	PX4_INFO_RAW("Serial Port Open %d Handle %d\n", device_port.is_open, device_port.handle);
+	PX4_INFO_RAW("Serial Port Open %d Handle %d Device %s\n", device_port.is_open, device_port.handle, _uart_device);
 	perf_print_counter(_loop_perf);
 	perf_print_counter(_loop_interval_perf);
 	return 0;
