@@ -195,6 +195,9 @@ CvIns::CvIns(const char *uart_port, int32_t rot) :
 {
 	_uart_device = uart_port;
 	_config._rot = static_cast<Rotation>(rot);
+	// TODO: Figure out how to set to arbitrary rates, currently it limited based on decimation
+	// // Clamp rate to allowable ranges
+	// _config._sens_imu_update_rate_hz = math::constrain<uint16_t>(_param_imu_gyro_ratemax.get(),100,1000);
 
 	device::Device::DeviceId device_id{};
 	device_id.devid_s.devtype = DRV_INS_DEVTYPE_3DMCV7;
@@ -244,13 +247,13 @@ void CvIns::set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t le
 		PX4_ERR("ERROR: Could not get sensor base rate format!");
 		return;
 	}
-
+	PX4_INFO("The CV7 base rate is %d", sensor_base_rate);
 
 	for (uint16_t i = 0; i < len; i++) {
 		// Compute the desired decimation and update all of the sensors in this set
-		const uint16_t sensor_decimation = sensor_base_rate / sensor_descriptors[i].decimation ;
+		float sensor_decimation = static_cast<float>(sensor_base_rate) / static_cast<float>(sensor_descriptors[i].decimation);
 
-		sensor_descriptors[i].decimation = sensor_decimation;
+		sensor_descriptors[i].decimation = static_cast<uint16_t>(sensor_decimation);
 	}
 
 	// Write the settings
