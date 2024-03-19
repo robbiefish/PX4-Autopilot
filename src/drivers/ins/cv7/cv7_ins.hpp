@@ -66,6 +66,12 @@ using namespace mip::C;
 
 using namespace time_literals;
 
+#define USING_MODALIO_UART
+
+#ifdef USING_MODALIO_UART
+#include "modal_io_serial.hpp"
+#endif
+
 // bool mip_interface_user_recv_from_device(mip_interface* device, uint8_t* buffer, size_t max_length, size_t* out_length, timestamp_type* timestamp_out);
 
 class CvIns : public ModuleBase<CvIns>, public ModuleParams, public px4::ScheduledWorkItem
@@ -163,7 +169,7 @@ private:
 	)
 	LogWriter _logger;
 	bool _armed{false};
-	uint8_t parse_buffer[1512];
+	uint8_t parse_buffer[2048];
 	bool _is_initialized{false};
 	bool _is_init_failed{false};
 	hrt_abstime _last_print{0};
@@ -175,7 +181,6 @@ private:
 	/******************************/
 	uint8_t _state{0};
 	mip::C::mip_interface device;
-
 
 	// Handlers
 	mip_dispatch_handler sensor_data_handlers[10];

@@ -41,11 +41,16 @@
 
 static CvIns *cv7_ins{nullptr};
 
+#ifdef USING_MODALIO_UART
+ModalIoSerial device_uart;
+#else
 serial_port device_port;
+#endif
 
 const uint8_t FILTER_ROLL_EVENT_ACTION_ID  = 1;
 const uint8_t FILTER_PITCH_EVENT_ACTION_ID = 2;
 
+#ifndef USING_MODALIO_UART
 int set_uart_baud(int speed)
 {
 	struct termios		_cfg;
@@ -79,6 +84,7 @@ int set_uart_baud(int speed)
 	return PX4_OK;
 
 }
+#endif
 
 void CvIns::handleAccel(void *user, const mip_field *field, timestamp_type timestamp)
 {
@@ -139,7 +145,7 @@ void CvIns::handleBaro(void *user, const mip_field *field, timestamp_type timest
 	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_pressure_data data;
 
-	PX4_INFO("[BARO] Now %" PRIu64 " Then %" PRIu64 " Elapsed %" PRIu64, hrt_absolute_time(), timestamp, hrt_elapsed_time(&timestamp));
+	// PX4_INFO("[BARO] Now %" PRIu64 " Then %" PRIu64 " Elapsed %" PRIu64, hrt_absolute_time(), timestamp, hrt_elapsed_time(&timestamp));
 
 	if (extract_mip_sensor_scaled_pressure_data_from_field(field, &data)) {
 		// Update the data structure
@@ -232,18 +238,24 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 {
 	(void)device;
 
-	*out_length = 0;
+	*timestamp_out = hrt_absolute_time();
 
-#if 0
-	int res = ::read(device_port.handle,buffer,max_length);
+#ifdef USING_MODALIO_UART
+	int res = device_uart.uart_read(buffer,max_length);
 
 	if(res == -1 && errno != EAGAIN){
+		// PX4_INFO("RX 1 %d(%d)",res,max_length);
+		*out_length = 0;
 		return false;
 	}
-	*out_length = res;
+	if(res >= 0){
+		*out_length = res;
+		// PX4_INFO("RX 2 %d(%d)",*out_length,max_length);
+	}
+	// PX4_INFO("RX 3 %d(%d)",*out_length,max_length);
 #else
+
 	if (!serial_port_read(&device_port, buffer, max_length, out_length)) {
-		*timestamp_out = hrt_absolute_time();
 		return false;
 	}
 #endif
@@ -258,13 +270,12 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 	cv7_ins->_read_bytes[1] += *out_length;
 	cv7_ins->_read_bytes[2] = math::max<uint32_t>(cv7_ins->_read_bytes[2],*out_length);
 	cv7_ins->_read_bytes[3]++;
-	*timestamp_out = hrt_absolute_time();
 	return true;
 }
 
 bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint8_t *data, size_t length)
 {
-	size_t bytes_written{0};
+
 
 #ifdef LOG_TRANSACTIONS
 
@@ -273,8 +284,17 @@ bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint
 	}
 
 #endif
-
+#ifdef USING_MODALIO_UART
+	PX4_INFO("TX %d",length);
+	int res = device_uart.uart_write(const_cast<uint8_t*>(data),length);
+	if(res >= 0){
+		return true;
+	}
+	return false;
+#else
+	size_t bytes_written{0};
 	return serial_port_write(&device_port, data, length, &bytes_written);
+	#endif
 }
 
 CvIns::CvIns(const char *uart_port, int32_t rot) :
@@ -306,9 +326,15 @@ CvIns::CvIns(const char *uart_port, int32_t rot) :
 
 CvIns::~CvIns()
 {
+	#ifdef USING_MODALIO_UART
+	if (device_uart.is_open()) {
+		device_uart.uart_close();
+	}
+	#else
 	if (serial_port_is_open(&device_port)) {
 		serial_port_close(&device_port);
 	}
+	#endif
 
 #ifdef LOG_TRANSACTIONS
 	_logger.thread_stop();
@@ -321,7 +347,7 @@ CvIns::~CvIns()
 bool CvIns::init()
 {
 	// Run on fixed interval
-	ScheduleOnInterval(500_us); // 2000 Hz
+	ScheduleOnInterval(666_us);
 
 	return true;
 }
@@ -356,6 +382,19 @@ void CvIns::set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t le
 
 int CvIns::connect_at_baud(int32_t baud)
 {
+	#ifdef USING_MODALIO_UART
+	if (device_uart.is_open()) {
+		if (device_uart.uart_set_baud(baud) == PX4_ERROR) {
+			PX4_INFO(" - Failed to set UART %" PRIu32 " baud", baud);
+		}
+
+	} else if (device_uart.uart_open(_uart_device, baud) == PX4_ERROR ) {
+		PX4_INFO(" - Failed to open UART");
+		PX4_ERR("ERROR: Could not open device port!");
+		return PX4_ERROR;
+	}
+	PX4_INFO("Serial Port %s with baud of %" PRIu32 " baud", (device_uart.is_open() ? "CONNECTED" : "NOT CONNECTED"), baud);
+	#else
 	if (device_port.is_open) {
 		if (set_uart_baud(baud) == PX4_ERROR) {
 			PX4_INFO(" - Failed to set UART %" PRIu32 " baud", baud);
@@ -366,8 +405,11 @@ int CvIns::connect_at_baud(int32_t baud)
 		PX4_ERR("ERROR: Could not open device port!");
 		return PX4_ERROR;
 	}
-
 	PX4_INFO("Serial Port %s with baud of %" PRIu32 " baud", (device_port.is_open ? "CONNECTED" : "NOT CONNECTED"), baud);
+	#endif
+
+
+
 
 	// Re-init the interface with the correct timeouts
 	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(baud) * 1_ms, 250_ms);
@@ -451,7 +493,11 @@ void CvIns::initialize_cv7()
 		return;
 	}
 
+	#ifdef USING_MODALIO_UART
+	tcflush(device_uart.uart_get_fd(), TCIOFLUSH);
+	#else
 	tcflush(device_port.handle, TCIOFLUSH);
+	#endif
 
 	usleep(500_ms);
 
@@ -473,11 +519,11 @@ void CvIns::initialize_cv7()
 	case mode_imu: {
 			// Scaled Gyro and Accel at a high rate
 			mip_descriptor_rate imu_sensors[5] = {
-				{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, 1/* _config._sens_imu_update_rate_hz */},
-				{ MIP_DATA_DESC_SENSOR_GYRO_SCALED, 1/* _config._sens_imu_update_rate_hz */},
-				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,  1 /*_config._sens_other_update_rate_hz*/},
-				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, 1 /*_config._sens_other_update_rate_hz*/},
-				{ MIP_DATA_DESC_SHARED_REFERENCE_TIME, 1/* _config._sens_imu_update_rate_hz */},
+				{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, _config._sens_imu_update_rate_hz},
+				{ MIP_DATA_DESC_SENSOR_GYRO_SCALED, _config._sens_imu_update_rate_hz},
+				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,  _config._sens_other_update_rate_hz},
+				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, _config._sens_other_update_rate_hz},
+				{ MIP_DATA_DESC_SHARED_REFERENCE_TIME, _config._sens_imu_update_rate_hz},
 
 			};
 			set_sensor_rate(imu_sensors, 5);
@@ -633,8 +679,6 @@ void CvIns::initialize_cv7()
 
 void CvIns::service_cv7()
 {
-
-	mip_interface_update(&device, false);
 	mip_interface_update(&device, false);
 
 	switch (_config._selected_mode) {
@@ -758,7 +802,11 @@ int CvIns::task_spawn(int argc, char *argv[])
 
 int CvIns::print_status()
 {
+	#ifdef USING_MODALIO_UART
+	PX4_INFO_RAW("Serial Port Open %d Handle %d Device %s\n", device_uart.is_open(), device_uart.uart_get_fd(), _uart_device);
+	#else
 	PX4_INFO_RAW("Serial Port Open %d Handle %d Device %s\n", device_port.is_open, device_port.handle, _uart_device);
+	#endif
 	PX4_INFO_RAW("Min %lu\n",_read_bytes[0]);
 	PX4_INFO_RAW("Total %lu\n",_read_bytes[1]);
 	PX4_INFO_RAW("Max %lu\n",_read_bytes[2]);
