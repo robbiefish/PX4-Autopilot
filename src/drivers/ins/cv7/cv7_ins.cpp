@@ -152,14 +152,14 @@ timestamp_type get_current_timestamp()
 	return hrt_absolute_time();
 }
 
-bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t *buffer, size_t max_length,
+bool mip_interface_user_recv_from_device(mip_interface *device, uint8_t *buffer, size_t max_length, timeout_type wait_time,
 		size_t *out_length, timestamp_type *timestamp_out)
 {
 	(void)device;
 
 	*timestamp_out = get_current_timestamp();
 
-	if (!serial_port_read(&device_port, buffer, max_length, out_length)) {
+	if (!serial_port_read(&device_port, buffer, max_length, wait_time, out_length)) {
 		return false;
 	}
 
@@ -174,7 +174,7 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 	return true;
 }
 
-bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint8_t *data, size_t length)
+bool mip_interface_user_send_to_device(mip_interface *device, const uint8_t *data, size_t length)
 {
 	size_t bytes_written{0};
 
@@ -270,7 +270,7 @@ int CvIns::connect_at_baud(int32_t baud)
 	static bool mip_init = false;
 	#ifdef CHANGE_UART_BAUD_WITHOUT_CLOSE
 
-	if(device_port.is_open){
+	if(serial_port_is_open(&device_port)){
 		if(set_uart_baud(baud) == PX4_ERROR){
 			PX4_INFO(" - Failed to set UART %" PRIu32 " baud",baud);
 		}
@@ -279,7 +279,7 @@ int CvIns::connect_at_baud(int32_t baud)
 		PX4_ERR("ERROR: Could not open device port!");
 		return PX4_ERROR;
 	}
-	PX4_INFO("Serial Port %s with baud of %" PRIu32 " baud", (device_port.is_open?"CONNECTED":"NOT CONNECTED"), baud);
+	PX4_INFO("Serial Port %s with baud of %" PRIu32 " baud", (serial_port_is_open(&device_port)?"CONNECTED":"NOT CONNECTED"), baud);
 	#else
 
 	// Close
@@ -296,7 +296,8 @@ int CvIns::connect_at_baud(int32_t baud)
 	}
 	#endif
 	if(!mip_init){
-		mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(baud) * 1_ms, 250_ms);
+		mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(baud) * 1_ms, 250_ms,
+		&mip_interface_user_send_to_device, &mip_interface_user_recv_from_device, &mip_interface_default_update, NULL);
 		mip_init = false;
 	}
 
@@ -689,7 +690,7 @@ int CvIns::task_spawn(int argc, char *argv[])
 
 int CvIns::print_status()
 {
-	PX4_INFO_RAW("Serial Port Open %d Handle %d Device %s\n", device_port.is_open, device_port.handle, _uart_device);
+	PX4_INFO_RAW("Serial Port Open %d Handle %d Device %s\n", serial_port_is_open(&device_port), device_port.handle, _uart_device);
 	perf_print_counter(_loop_perf);
 	perf_print_counter(_loop_interval_perf);
 	return 0;

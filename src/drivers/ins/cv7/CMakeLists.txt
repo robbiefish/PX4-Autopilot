@@ -31,6 +31,11 @@
 #
 ############################################################################
 
+# Set some options for the MIP SDK which we will reset after building.
+set(MIP_USE_TCP "OFF" CACHE BOOL "" FORCE)
+set(MIP_DISABLE_CPP "ON" CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES "OFF" CACHE BOOL "" FORCE)
+set(BUILD_TESTING "OFF" CACHE BOOL "" FORCE)
 add_subdirectory(mip_sdk)
 
 project(drivers__ins__cv7_ins LANGUAGES C CXX)
@@ -46,5 +51,5 @@ px4_add_module(
 		cv7_ins.hpp
 	DEPENDS
 		px4_work_queue
-		mip_sdk
+		mip
 	)
