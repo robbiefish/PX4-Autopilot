@@ -151,6 +151,11 @@ void CvIns::handleBaro(void *user, const mip_field *field, timestamp_type timest
 		// Update the data structure
 		ref->_baro.sample = data;
 		ref->_baro.updated = true;
+
+		// ref->_sensor_baro.timestamp = hrt_absolute_time();
+		// ref->_sensor_baro.timestamp_sample = hrt_absolute_time();
+		// ref->_sensor_baro.pressure = data.scaled_pressure * 100.f; // convert [Pa] to [mBar]
+		// ref->_sensor_baro_pub.publish(ref->_sensor_baro);
 	}
 }
 
@@ -347,7 +352,7 @@ CvIns::~CvIns()
 bool CvIns::init()
 {
 	// Run on fixed interval
-	ScheduleOnInterval(666_us);
+	ScheduleOnInterval(2000_us);
 
 	return true;
 }
@@ -526,6 +531,7 @@ void CvIns::initialize_cv7()
 				{ MIP_DATA_DESC_SHARED_REFERENCE_TIME, _config._sens_imu_update_rate_hz},
 
 			};
+
 			set_sensor_rate(imu_sensors, 5);
 
 			//
