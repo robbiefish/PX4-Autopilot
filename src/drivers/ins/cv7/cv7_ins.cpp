@@ -46,7 +46,8 @@ serial_port device_port;
 const uint8_t FILTER_ROLL_EVENT_ACTION_ID  = 1;
 const uint8_t FILTER_PITCH_EVENT_ACTION_ID = 2;
 
-int set_uart_baud(int speed){
+int set_uart_baud(int speed)
+{
 	struct termios		_cfg;
 	/* Fill the struct for the new configuration */
 	tcgetattr(device_port.handle, &_cfg);
@@ -85,13 +86,17 @@ void CvIns::handleAccel(void *user, const mip_field *field, timestamp_type times
 	mip_sensor_scaled_accel_data data;
 
 	if (extract_mip_sensor_scaled_accel_data_from_field(field, &data)) {
-		PX4_DEBUG("Accel Data: %f %f %f", (double)data.scaled_accel[0], (double)data.scaled_accel[1],
-			  (double)data.scaled_accel[2]);
+		// Update the data structure
+		ref->_accel.sample = data;
+		ref->_accel.updated = true;
 
-		// Pass in "now" as the current timestamp_sample value
-		ref->_px4_accel.update(hrt_absolute_time(), data.scaled_accel[0]*CONSTANTS_ONE_G, data.scaled_accel[1]*CONSTANTS_ONE_G,
-				       data.scaled_accel[2]*CONSTANTS_ONE_G);
-		ref->_time_last_valid_imu_us = timestamp;
+		// PX4_DEBUG("Accel Data: %f %f %f", (double)data.scaled_accel[0], (double)data.scaled_accel[1],
+		// 	  (double)data.scaled_accel[2]);
+
+		// auto t = hrt_absolute_time(); // timestamp;
+		// ref->_px4_accel.update(t, data.scaled_accel[0]*CONSTANTS_ONE_G, data.scaled_accel[1]*CONSTANTS_ONE_G,
+		// 		       data.scaled_accel[2]*CONSTANTS_ONE_G);
+		// ref->_time_last_valid_imu_us = t;
 	}
 }
 
@@ -101,10 +106,15 @@ void CvIns::handleGyro(void *user, const mip_field *field, timestamp_type timest
 	mip_sensor_scaled_gyro_data data;
 
 	if (extract_mip_sensor_scaled_gyro_data_from_field(field, &data)) {
-		PX4_DEBUG("Gyro Data:  %f, %f, %f", (double)data.scaled_gyro[0], (double)data.scaled_gyro[1],
-			  (double)data.scaled_gyro[2]);
-		ref->_px4_gyro.update(hrt_absolute_time(), data.scaled_gyro[0], data.scaled_gyro[1], data.scaled_gyro[2]);
-		ref->_time_last_valid_imu_us = timestamp;
+		// Update the data structure
+		ref->_gyro.sample = data;
+		ref->_gyro.updated = true;
+
+		// PX4_DEBUG("Gyro Data:  %f, %f, %f", (double)data.scaled_gyro[0], (double)data.scaled_gyro[1],
+		// 	  (double)data.scaled_gyro[2]);
+		// auto t = hrt_absolute_time(); // timestamp;
+		// ref->_px4_gyro.update(t, data.scaled_gyro[0], data.scaled_gyro[1], data.scaled_gyro[2]);
+		// ref->_time_last_valid_imu_us = t;
 	}
 }
 
@@ -114,8 +124,13 @@ void CvIns::handleMag(void *user, const mip_field *field, timestamp_type timesta
 	mip_sensor_scaled_mag_data data;
 
 	if (extract_mip_sensor_scaled_mag_data_from_field(field, &data)) {
-		PX4_DEBUG("Mag Data:   %f, %f, %f", (double)data.scaled_mag[0], (double)data.scaled_mag[1], (double)data.scaled_mag[2]);
-		ref->_px4_mag.update(hrt_absolute_time(), data.scaled_mag[0], data.scaled_mag[1], data.scaled_mag[2]);
+		// Update the data structure
+		ref->_mag.sample = data;
+		ref->_mag.updated = true;
+
+		// PX4_DEBUG("Mag Data:   %f, %f, %f", (double)data.scaled_mag[0], (double)data.scaled_mag[1], (double)data.scaled_mag[2]);
+		// auto t =  timestamp;; //hrt_absolute_time()
+		// ref->_px4_mag.update(t, data.scaled_mag[0], data.scaled_mag[1], data.scaled_mag[2]);
 	}
 }
 
@@ -124,14 +139,79 @@ void CvIns::handleBaro(void *user, const mip_field *field, timestamp_type timest
 	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_pressure_data data;
 
+	PX4_INFO("[BARO] Now %" PRIu64 " Then %" PRIu64 " Elapsed %" PRIu64, hrt_absolute_time(), timestamp, hrt_elapsed_time(&timestamp));
+
 	if (extract_mip_sensor_scaled_pressure_data_from_field(field, &data)) {
-		PX4_DEBUG("Baro Data:   %f", (double)data.scaled_pressure);
-		ref->_sensor_baro.timestamp = hrt_absolute_time();
-		ref->_sensor_baro.timestamp_sample = hrt_absolute_time();
-		ref->_sensor_baro.pressure = data.scaled_pressure * 100.f; // convert [Pa] to [mBar]
-		ref->_sensor_baro_pub.publish(ref->_sensor_baro);
+		// Update the data structure
+		ref->_baro.sample = data;
+		ref->_baro.updated = true;
 	}
 }
+
+hrt_abstime CvIns::get_sample_timestamp(timestamp_type decode_timestamp, mip_shared_reference_timestamp_data ref_time){
+	hrt_abstime t{0};
+	// TODO: Handle the offset between system time and this timestamp
+	t = ref_time.nanoseconds / 1000;
+
+	// Compute the offset first time through
+	if(_cv7_offset_time == 0){
+		PX4_INFO("Device Time Setup");
+		PX4_INFO("Now %" PRIu64, decode_timestamp);
+		PX4_INFO("Device Time %" PRIu64, t);
+		_cv7_offset_time = decode_timestamp - t - 1900_us;
+		PX4_INFO("Computed Offset %" PRId64, _cv7_offset_time);
+	}
+
+	// Adjsut the time to px4 relative time
+	t += _cv7_offset_time;
+
+	return t;
+}
+
+void CvIns::handleTimestamp(void *user, const mip_field *field, timestamp_type timestamp)
+{
+	CvIns *ref = static_cast<CvIns *>(user);
+	mip_shared_reference_timestamp_data data;
+
+	if (extract_mip_shared_reference_timestamp_data_from_field(field, &data)) {
+
+		// Convert to a useful time for PX4
+		// auto t = ref->get_sample_timestamp(timestamp, data);		// Causes timestamps duplications (buffer too full?)
+		// auto t = timestamp - 1900_us;				// Packets are then ~4ms old and timestamp duplications
+		// auto t = hrt_absolute_time() - 1900_us;			// Packets are then ~2ms old
+		auto t = hrt_absolute_time();					// Packets are old but system thinks they are new
+
+		// Send all of the data with the common timestamp
+
+		if(ref->_accel.updated){
+			ref->_px4_accel.update(t, ref->_accel.sample.scaled_accel[0]*CONSTANTS_ONE_G, ref->_accel.sample.scaled_accel[1]*CONSTANTS_ONE_G,
+					       ref->_accel.sample.scaled_accel[2]*CONSTANTS_ONE_G);
+			ref->_time_last_valid_imu_us = t;
+			ref->_accel.updated = false;
+		}
+
+		if(ref->_gyro.updated){
+			ref->_px4_gyro.update(t, ref->_gyro.sample.scaled_gyro[0], ref->_gyro.sample.scaled_gyro[1], ref->_gyro.sample.scaled_gyro[2]);
+			ref->_time_last_valid_imu_us = t;
+			ref->_gyro.updated = false;
+		}
+
+		if(ref->_mag.updated){
+			ref->_px4_mag.update(t, ref->_mag.sample.scaled_mag[0], ref->_mag.sample.scaled_mag[1], ref->_mag.sample.scaled_mag[2]);
+			ref->_mag.updated = false;
+		}
+
+		if(ref->_baro.updated){
+			ref->_sensor_baro.timestamp = timestamp;
+			ref->_sensor_baro.timestamp_sample = t;
+			ref->_sensor_baro.pressure = ref->_baro.sample.scaled_pressure * 100.f; // convert [Pa] to [mBar]
+			ref->_sensor_baro_pub.publish(ref->_sensor_baro);
+			ref->_baro.updated = false;
+		}
+	}
+}
+
+
 
 void handle_filter_event_source(void *user, const mip_field *field, timestamp_type timestamp)
 {
@@ -147,22 +227,26 @@ void handle_filter_event_source(void *user, const mip_field *field, timestamp_ty
 	}
 }
 
-timestamp_type get_current_timestamp()
-{
-	return hrt_absolute_time();
-}
-
 bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t *buffer, size_t max_length,
 		size_t *out_length, timestamp_type *timestamp_out)
 {
 	(void)device;
 
-	*timestamp_out = get_current_timestamp();
+	*out_length = 0;
 
-	if (!serial_port_read(&device_port, buffer, max_length, out_length)) {
+#if 0
+	int res = ::read(device_port.handle,buffer,max_length);
+
+	if(res == -1 && errno != EAGAIN){
 		return false;
 	}
-
+	*out_length = res;
+#else
+	if (!serial_port_read(&device_port, buffer, max_length, out_length)) {
+		*timestamp_out = hrt_absolute_time();
+		return false;
+	}
+#endif
 #ifdef LOG_TRANSACTIONS
 
 	if (cv7_ins) {
@@ -170,7 +254,11 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 	}
 
 #endif
-
+	cv7_ins->_read_bytes[0] = math::min<uint32_t>(cv7_ins->_read_bytes[0],*out_length);
+	cv7_ins->_read_bytes[1] += *out_length;
+	cv7_ins->_read_bytes[2] = math::max<uint32_t>(cv7_ins->_read_bytes[2],*out_length);
+	cv7_ins->_read_bytes[3]++;
+	*timestamp_out = hrt_absolute_time();
 	return true;
 }
 
@@ -233,7 +321,7 @@ CvIns::~CvIns()
 bool CvIns::init()
 {
 	// Run on fixed interval
-	ScheduleOnInterval(1000_us); // 1000 Hz
+	ScheduleOnInterval(500_us); // 2000 Hz
 
 	return true;
 }
@@ -247,6 +335,7 @@ void CvIns::set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t le
 		PX4_ERR("ERROR: Could not get sensor base rate format!");
 		return;
 	}
+
 	PX4_INFO("The CV7 base rate is %d", sensor_base_rate);
 
 	for (uint16_t i = 0; i < len; i++) {
@@ -257,48 +346,31 @@ void CvIns::set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t le
 	}
 
 	// Write the settings
-	if (mip_3dm_write_message_format(&device, MIP_SENSOR_DATA_DESC_SET, len, sensor_descriptors) != MIP_ACK_OK) {
-		PX4_ERR("ERROR: Could not set sensor message format!");
+	mip_cmd_result res = mip_3dm_write_message_format(&device, MIP_SENSOR_DATA_DESC_SET, len, sensor_descriptors);
+
+	if (res != MIP_ACK_OK) {
+		PX4_ERR("ERROR: Could not set sensor message format! Result of %d", res);
 		return;
 	}
 }
 
 int CvIns::connect_at_baud(int32_t baud)
 {
-	// TODO: Test these changes
-	#define CHANGE_UART_BAUD_WITHOUT_CLOSE
-	static bool mip_init = false;
-	#ifdef CHANGE_UART_BAUD_WITHOUT_CLOSE
-
-	if(device_port.is_open){
-		if(set_uart_baud(baud) == PX4_ERROR){
-			PX4_INFO(" - Failed to set UART %" PRIu32 " baud",baud);
+	if (device_port.is_open) {
+		if (set_uart_baud(baud) == PX4_ERROR) {
+			PX4_INFO(" - Failed to set UART %" PRIu32 " baud", baud);
 		}
+
 	} else if (!serial_port_open(&device_port, _uart_device, baud)) {
 		PX4_INFO(" - Failed to open UART");
 		PX4_ERR("ERROR: Could not open device port!");
 		return PX4_ERROR;
 	}
-	PX4_INFO("Serial Port %s with baud of %" PRIu32 " baud", (device_port.is_open?"CONNECTED":"NOT CONNECTED"), baud);
-	#else
 
-	// Close
-	if (serial_port_is_open(&device_port)) {
-		serial_port_close(&device_port);
-	}
+	PX4_INFO("Serial Port %s with baud of %" PRIu32 " baud", (device_port.is_open ? "CONNECTED" : "NOT CONNECTED"), baud);
 
-	PX4_INFO("Attempting to conect at %" PRIu32 " baud", baud);
-
-	if (!serial_port_open(&device_port, _uart_device, baud)) {
-		PX4_INFO(" - Failed to open UART");
-		PX4_ERR("ERROR: Could not open device port!");
-		return PX4_ERROR;
-	}
-	#endif
-	if(!mip_init){
-		mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(baud) * 1_ms, 250_ms);
-		mip_init = false;
-	}
+	// Re-init the interface with the correct timeouts
+	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(baud) * 1_ms, 250_ms);
 
 	PX4_INFO("mip_base_ping");
 
@@ -324,7 +396,7 @@ void CvIns::initialize_cv7()
 
 	// first try default baudrate
 	const uint32_t DEFAULT_BAUDRATE = 115200;
-	const uint32_t DESIRED_BAUDRATE = 460800;
+	const uint32_t DESIRED_BAUDRATE = 921600;
 
 	if (connect_at_baud(DEFAULT_BAUDRATE) == PX4_ERROR) {
 
@@ -332,14 +404,15 @@ void CvIns::initialize_cv7()
 		bool is_connected = false;
 
 		for (auto &baudrate : BAUDRATES) {
-
 			if (connect_at_baud(baudrate) == PX4_OK) {
 				PX4_INFO("found baudrate %" PRIu32, baudrate);
 				is_connected = true;
 				break;
 			}
 		}
-		if(!is_connected){
+
+		if (!is_connected) {
+			_is_init_failed = true;
 			PX4_WARN("Could not connect to the device, exiting");
 			return;
 		}
@@ -374,6 +447,7 @@ void CvIns::initialize_cv7()
 
 	if (mip_3dm_write_uart_baudrate(&device, DESIRED_BAUDRATE) != MIP_ACK_OK) {
 		PX4_ERR("ERROR: Could not set the baudrate!");
+		_is_init_failed = true;
 		return;
 	}
 
@@ -390,6 +464,7 @@ void CvIns::initialize_cv7()
 
 		if (i >= 9) {
 			PX4_ERR("ERROR: Could not reconnect at desired baud!");
+			_is_init_failed = true;
 			return;
 		}
 	}
@@ -397,13 +472,53 @@ void CvIns::initialize_cv7()
 	switch (_config._selected_mode) {
 	case mode_imu: {
 			// Scaled Gyro and Accel at a high rate
-			mip_descriptor_rate imu_sensors[4] = {
-				{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, _config._sens_imu_update_rate_hz },
-				{ MIP_DATA_DESC_SENSOR_GYRO_SCALED,  _config._sens_imu_update_rate_hz },
-				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,   _config._sens_other_update_rate_hz },
-				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, _config._sens_other_update_rate_hz}
+			mip_descriptor_rate imu_sensors[5] = {
+				{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, 1/* _config._sens_imu_update_rate_hz */},
+				{ MIP_DATA_DESC_SENSOR_GYRO_SCALED, 1/* _config._sens_imu_update_rate_hz */},
+				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,  1 /*_config._sens_other_update_rate_hz*/},
+				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, 1 /*_config._sens_other_update_rate_hz*/},
+				{ MIP_DATA_DESC_SHARED_REFERENCE_TIME, 1/* _config._sens_imu_update_rate_hz */},
+
 			};
-			set_sensor_rate(imu_sensors, 4);
+			set_sensor_rate(imu_sensors, 5);
+
+			//
+			// Register data callbacks
+			//
+			mip_interface_register_field_callback(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
+							      MIP_DATA_DESC_SENSOR_ACCEL_SCALED, &handleAccel, this);
+			mip_interface_register_field_callback(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET,
+							      MIP_DATA_DESC_SENSOR_GYRO_SCALED, &handleGyro, this);
+			mip_interface_register_field_callback(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET,
+							      MIP_DATA_DESC_SENSOR_MAG_SCALED, &handleMag, this);
+			mip_interface_register_field_callback(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET,
+							      MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, &handleBaro, this);
+			mip_interface_register_field_callback(&device, &sensor_data_handlers[4], MIP_SHARED_DATA_DESC_SET,
+							      MIP_DATA_DESC_SHARED_REFERENCE_TIME, &handleTimestamp, this);
+
+			mip_interface_register_extractor(&device, &sensor_data_handlers[5], MIP_SHARED_DATA_DESC_SET,
+							 MIP_DATA_DESC_SHARED_REFERENCE_TIME,     extract_mip_shared_reference_timestamp_data_from_field,
+							 &sensor_reference_time);
+
+			// uint16_t shared_data_base_rate{1000};
+
+			// mip_cmd_result res = mip_3dm_get_base_rate(&device, MIP_SHARED_DATA_DESC_SET, &shared_data_base_rate);
+			// if (res != MIP_ACK_OK) {
+			// 	PX4_ERR("ERROR: Could not get filter base rate format! Result of %d -- continuing", res);
+			// }
+			// 	// { MIP_DATA_DESC_SENSOR_TIME_STAMP_INTERNAL, 50 },
+			// const uint16_t shared_sample_rate = 10; // Hz
+			// const uint16_t filter_decimation = shared_data_base_rate / shared_sample_rate;
+
+			// const mip_descriptor_rate shared_sample_descriptors[1] = {
+			// 	{ MIP_DATA_DESC_SHARED_REFERENCE_TIME,         filter_decimation }
+			// };
+
+			// mip_cmd_result res = mip_3dm_write_message_format(&device, MIP_SHARED_DATA_DESC_SET, 1, shared_sample_descriptors);
+			// if ( res!= MIP_ACK_OK) {
+			// 	PX4_ERR("ERROR: Could not set shared message format! Result of %d", res);
+			// 	return;
+			// }
 
 		}
 		break;
@@ -433,84 +548,69 @@ void CvIns::initialize_cv7()
 				PX4_ERR("ERROR: Could not set filter message format!");
 				return;
 			}
+
+
+			// Filter Data
+			mip_interface_register_extractor(&device, &filter_data_handlers[0], MIP_FILTER_DATA_DESC_SET,
+							 MIP_DATA_DESC_FILTER_FILTER_TIMESTAMP, extract_mip_filter_timestamp_data_from_field, &filter_time);
+			mip_interface_register_extractor(&device, &filter_data_handlers[1], MIP_FILTER_DATA_DESC_SET,
+							 MIP_DATA_DESC_FILTER_FILTER_STATUS,    extract_mip_filter_status_data_from_field,        &filter_status);
+			mip_interface_register_extractor(&device, &filter_data_handlers[2], MIP_FILTER_DATA_DESC_SET,
+							 MIP_DATA_DESC_FILTER_ATT_EULER_ANGLES, extract_mip_filter_euler_angles_data_from_field,  &filter_euler_angles);
+			mip_interface_register_field_callback(&device, &filter_data_handlers[3], MIP_FILTER_DATA_DESC_SET,
+							      MIP_DATA_DESC_SHARED_EVENT_SOURCE, handle_filter_event_source,  NULL);
+
+			//
+			//Reset the filter (note: this is good to do after filter setup is complete)
+			//
+
+			if (mip_filter_reset(&device) != MIP_ACK_OK) {
+				PX4_ERR("ERROR: Could not reset the filter!");
+				return;
+			}
 		}
 		break;
 
-	case mode_ins:
+	case mode_ins: {
+			//
+			//Setup the filter aiding measurements (GNSS position/velocity)
+			//
+
+			if (mip_filter_write_aiding_measurement_enable(&device,
+					MIP_FILTER_AIDING_MEASUREMENT_ENABLE_COMMAND_AIDING_SOURCE_GNSS_POS_VEL, true) != MIP_ACK_OK) {
+				PX4_ERR("ERROR: Could not set filter aiding measurement enable!");
+				return;
+			}
+
+			//Sensor Data
+			mip_interface_register_extractor(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
+							 MIP_DATA_DESC_SHARED_REFERENCE_TIME,     extract_mip_shared_reference_timestamp_data_from_field,
+							 &sensor_reference_time);
+			mip_interface_register_extractor(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET,
+							 MIP_DATA_DESC_SHARED_GPS_TIME,     extract_mip_shared_gps_timestamp_data_from_field, &sensor_gps_time);
+			mip_interface_register_extractor(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET,
+							 MIP_DATA_DESC_SENSOR_ACCEL_SCALED, extract_mip_sensor_scaled_accel_data_from_field,  &sensor_accel);
+			mip_interface_register_extractor(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET,
+							 MIP_DATA_DESC_SENSOR_GYRO_SCALED,  extract_mip_sensor_scaled_gyro_data_from_field,   &sensor_gyro);
+			mip_interface_register_extractor(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET,
+							 MIP_DATA_DESC_SENSOR_MAG_SCALED,   extract_mip_sensor_scaled_mag_data_from_field,    &sensor_mag);
+		}
 		break;
 
 	default:
 		break;
 	}
 
+	//
+	// Setup the rotation based on PX4 standard rotation sets
+	//
+
 	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, math::radians<float>(rot_lookup[_config._rot].roll),
-			math::radians<float>(rot_lookup[_config._rot].pitch), math::radians<float>(rot_lookup[_config._rot].yaw)) != MIP_ACK_OK) {
+			math::radians<float>(rot_lookup[_config._rot].pitch),
+			math::radians<float>(rot_lookup[_config._rot].yaw)) != MIP_ACK_OK) {
 		PX4_ERR("ERROR: Could not set sensor-to-vehicle transformation!");
 		return;
 	}
-
-	//
-	//Setup the filter aiding measurements (GNSS position/velocity)
-	//
-
-#if 0
-
-	if (mip_filter_write_aiding_measurement_enable(&device,
-			MIP_FILTER_AIDING_MEASUREMENT_ENABLE_COMMAND_AIDING_SOURCE_GNSS_POS_VEL, true) != MIP_ACK_OK) {
-		PX4_ERR("ERROR: Could not set filter aiding measurement enable!");
-		return;
-	}
-
-#endif
-
-
-	//
-	//Reset the filter (note: this is good to do after filter setup is complete)
-	//
-
-	if (mip_filter_reset(&device) != MIP_ACK_OK) {
-		PX4_ERR("ERROR: Could not reset the filter!");
-		return;
-	}
-
-
-	//
-	// Register data callbacks
-	//
-#if 0
-	//Sensor Data
-	mip_interface_register_extractor(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
-					 MIP_DATA_DESC_SHARED_REFERENCE_TIME,     extract_mip_shared_reference_timestamp_data_from_field,
-					 &sensor_reference_time);
-	mip_interface_register_extractor(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET,
-					 MIP_DATA_DESC_SHARED_GPS_TIME,     extract_mip_shared_gps_timestamp_data_from_field, &sensor_gps_time);
-	mip_interface_register_extractor(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET,
-					 MIP_DATA_DESC_SENSOR_ACCEL_SCALED, extract_mip_sensor_scaled_accel_data_from_field,  &sensor_accel);
-	mip_interface_register_extractor(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET,
-					 MIP_DATA_DESC_SENSOR_GYRO_SCALED,  extract_mip_sensor_scaled_gyro_data_from_field,   &sensor_gyro);
-	mip_interface_register_extractor(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET,
-					 MIP_DATA_DESC_SENSOR_MAG_SCALED,   extract_mip_sensor_scaled_mag_data_from_field,    &sensor_mag);
-#else
-	// TODO: Move into an IMU specific setup
-	mip_interface_register_field_callback(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
-					      MIP_DATA_DESC_SENSOR_ACCEL_SCALED, &handleAccel, this);
-	mip_interface_register_field_callback(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET,
-					      MIP_DATA_DESC_SENSOR_GYRO_SCALED, &handleGyro, this);
-	mip_interface_register_field_callback(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET,
-					      MIP_DATA_DESC_SENSOR_MAG_SCALED, &handleMag, this);
-	mip_interface_register_field_callback(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET,
-					      MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, &handleBaro, this);
-#endif
-	// TODO: Move into an AHRS specific setup
-	// Filter Data
-	mip_interface_register_extractor(&device, &filter_data_handlers[0], MIP_FILTER_DATA_DESC_SET,
-					 MIP_DATA_DESC_FILTER_FILTER_TIMESTAMP, extract_mip_filter_timestamp_data_from_field, &filter_time);
-	mip_interface_register_extractor(&device, &filter_data_handlers[1], MIP_FILTER_DATA_DESC_SET,
-					 MIP_DATA_DESC_FILTER_FILTER_STATUS,    extract_mip_filter_status_data_from_field,        &filter_status);
-	mip_interface_register_extractor(&device, &filter_data_handlers[2], MIP_FILTER_DATA_DESC_SET,
-					 MIP_DATA_DESC_FILTER_ATT_EULER_ANGLES, extract_mip_filter_euler_angles_data_from_field,  &filter_euler_angles);
-	mip_interface_register_field_callback(&device, &filter_data_handlers[3], MIP_FILTER_DATA_DESC_SET,
-					      MIP_DATA_DESC_SHARED_EVENT_SOURCE, handle_filter_event_source,  NULL);
 
 
 	if (mip_3dm_write_datastream_control(&device, MIP_3DM_DATASTREAM_CONTROL_COMMAND_ALL_STREAMS, true) != MIP_ACK_OK) {
@@ -534,54 +634,16 @@ void CvIns::initialize_cv7()
 void CvIns::service_cv7()
 {
 
-	if (_is_initialized) {
-		if ((_time_last_valid_imu_us != 0) && (hrt_elapsed_time(&_time_last_valid_imu_us) < 3_s)) {
-			// update sensor_selection if configured in INS mode
-			if ((_px4_accel.get_device_id() != 0) && (_px4_gyro.get_device_id() != 0)) {
-				sensor_selection_s sensor_selection{};
-				sensor_selection.accel_device_id = _px4_accel.get_device_id();
-				sensor_selection.gyro_device_id = _px4_gyro.get_device_id();
-				sensor_selection.timestamp = hrt_absolute_time();
-				_sensor_selection_pub.publish(sensor_selection);
-			}
-		}
-	}
-
+	mip_interface_update(&device, false);
 	mip_interface_update(&device, false);
 
-	// Debug to verify that mode switching happens (without streams of messages)
-	switch (_state) {
-	case 0:
-		if (hrt_elapsed_time(&_last_print) > 10_s) {
-			_last_print = hrt_absolute_time();
-			PX4_INFO("Waiting for Filter to enter AHRS mode");
-			PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
-				     (double)sensor_accel.scaled_accel[2]);
-		}
-
-		if (filter_status.filter_state == MIP_FILTER_MODE_AHRS) {
-			PX4_INFO("Entered AHRS mode, switching state");
-			_state = 1;
-		}
-
+	switch (_config._selected_mode) {
+	case mode_ins:
+		// Feed any aiding information into the driver here
 		break;
 
-	case 1:
-		if (hrt_elapsed_time(&_last_print) > 250_ms) {
-			_last_print = hrt_absolute_time();
-			PX4_INFO_RAW("Timestamp %llu Sensor Time %llu\n", _last_print, sensor_reference_time.nanoseconds);
-			PX4_INFO_RAW("Accel: %f %f %f\n", (double)sensor_accel.scaled_accel[0], (double)sensor_accel.scaled_accel[1],
-				     (double)sensor_accel.scaled_accel[2]);
-			PX4_INFO_RAW("Gyro: %f %f %f\n", (double)sensor_gyro.scaled_gyro[0], (double)sensor_gyro.scaled_gyro[1],
-				     (double)sensor_gyro.scaled_gyro[2]);
-			PX4_INFO_RAW("Mag: %f %f %f\n", (double)sensor_mag.scaled_mag[0], (double)sensor_mag.scaled_mag[1],
-				     (double)sensor_mag.scaled_mag[2]);
-			PX4_INFO_RAW("R: %f P: %f Y: %f\n", (double)filter_euler_angles.roll, (double)filter_euler_angles.pitch,
-				     (double)filter_euler_angles.yaw);
-		}
-
-		break;
-
+	case mode_ahrs:
+	case mode_imu:
 	default:
 		break;
 	}
@@ -615,6 +677,13 @@ void CvIns::Run()
 #endif
 
 	initialize_cv7();
+
+	// Initialization failed, stop the module
+	if (_is_init_failed) {
+		request_stop();
+		perf_end(_loop_perf);
+		return;
+	}
 
 	// Check if parameters have changed
 	if (_parameter_update_sub.updated()) {
@@ -690,6 +759,16 @@ int CvIns::task_spawn(int argc, char *argv[])
 int CvIns::print_status()
 {
 	PX4_INFO_RAW("Serial Port Open %d Handle %d Device %s\n", device_port.is_open, device_port.handle, _uart_device);
+	PX4_INFO_RAW("Min %lu\n",_read_bytes[0]);
+	PX4_INFO_RAW("Total %lu\n",_read_bytes[1]);
+	PX4_INFO_RAW("Max %lu\n",_read_bytes[2]);
+	PX4_INFO_RAW("Avg %f\n",static_cast<double>(_read_bytes[1]*1.f / _read_bytes[3]*1.f));
+	_read_bytes[0] = UINT32_MAX;
+	for (int i = 1; i < 4; i++)
+	{
+		_read_bytes[i] = 0;
+	}
+
 	perf_print_counter(_loop_perf);
 	perf_print_counter(_loop_interval_perf);
 	return 0;

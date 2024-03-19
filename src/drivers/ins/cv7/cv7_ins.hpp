@@ -78,6 +78,8 @@ public:
 	static void handleGyro(void *user, const mip_field *field, timestamp_type timestamp);
 	static void handleMag(void *user, const mip_field *field, timestamp_type timestamp);
 	static void handleBaro(void *user, const mip_field *field, timestamp_type timestamp);
+	hrt_abstime get_sample_timestamp(timestamp_type decode_timestamp, mip_shared_reference_timestamp_data ref_time);
+	static void handleTimestamp(void * user, const mip_field * field, timestamp_type timestamp);
 
 	/** @see ModuleBase */
 	static int task_spawn(int argc, char *argv[]);
@@ -124,6 +126,16 @@ private:
 
 	cv7_configuration _config;
 
+	template <typename T>
+	struct ext_sample{
+		T sample;
+		bool updated;
+	};
+	ext_sample<mip_sensor_scaled_accel_data> _accel{0};
+	ext_sample<mip_sensor_scaled_gyro_data> _gyro{0};
+	ext_sample<mip_sensor_scaled_mag_data> _mag{0};
+	ext_sample<mip_sensor_scaled_pressure_data> _baro{0};
+
 	PX4Accelerometer _px4_accel{0};
 	PX4Gyroscope _px4_gyro{0};
 	PX4Magnetometer _px4_mag{0};
@@ -153,7 +165,10 @@ private:
 	bool _armed{false};
 	uint8_t parse_buffer[1512];
 	bool _is_initialized{false};
+	bool _is_init_failed{false};
 	hrt_abstime _last_print{0};
+	hrt_abstime _sensor_sample_time{0};
+	public:uint32_t _read_bytes[4]{0};
 
 
 
@@ -163,7 +178,7 @@ private:
 
 
 	// Handlers
-	mip_dispatch_handler sensor_data_handlers[5];
+	mip_dispatch_handler sensor_data_handlers[10];
 	mip_dispatch_handler filter_data_handlers[4];
 
 	//Device data stores
@@ -179,5 +194,6 @@ private:
 
 	bool filter_state_ahrs = false;
 	const char *_uart_device;
+	int64_t _cv7_offset_time{0};
 
 };
