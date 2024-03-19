@@ -189,8 +189,9 @@ void CvIns::handleTimestamp(void *user, const mip_field *field, timestamp_type t
 		// Convert to a useful time for PX4
 		// auto t = ref->get_sample_timestamp(timestamp, data);		// Causes timestamps duplications (buffer too full?)
 		// auto t = timestamp - 1900_us;				// Packets are then ~4ms old and timestamp duplications
-		// auto t = hrt_absolute_time() - 1900_us;			// Packets are then ~2ms old
-		auto t = hrt_absolute_time();					// Packets are old but system thinks they are new
+		auto t = hrt_absolute_time() - 1900_us;				// Packets are then ~2ms old
+		// auto t = hrt_absolute_time();				// Packets are old but system thinks they are new
+		// auto t = timestamp;						// Packets at time of arrival and timestamp duplications
 
 		// Send all of the data with the common timestamp
 
