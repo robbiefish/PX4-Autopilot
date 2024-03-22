@@ -41,50 +41,11 @@
 
 static CvIns *cv7_ins{nullptr};
 
-#ifdef USING_MODALIO_UART
+
 ModalIoSerial device_uart;
-#else
-serial_port device_port;
-#endif
 
 const uint8_t FILTER_ROLL_EVENT_ACTION_ID  = 1;
 const uint8_t FILTER_PITCH_EVENT_ACTION_ID = 2;
-
-#ifndef USING_MODALIO_UART
-int set_uart_baud(int speed)
-{
-	struct termios		_cfg;
-	/* Fill the struct for the new configuration */
-	tcgetattr(device_port.handle, &_cfg);
-
-	/* Disable output post-processing */
-	_cfg.c_oflag &= ~OPOST;
-
-	_cfg.c_cflag |= (CLOCAL | CREAD);    /* ignore modem controls */
-	_cfg.c_cflag &= ~CSIZE;
-	_cfg.c_cflag |= CS8;                 /* 8-bit characters */
-	_cfg.c_cflag &= ~PARENB;             /* no parity bit */
-	_cfg.c_cflag &= ~CSTOPB;             /* only need 1 stop bit */
-	_cfg.c_cflag &= ~CRTSCTS;            /* no hardware flowcontrol */
-
-	/* setup for non-canonical mode */
-	_cfg.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
-	_cfg.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-
-	if (cfsetispeed(&_cfg, speed) < 0 || cfsetospeed(&_cfg, speed) < 0) {
-		PX4_ERR("Error configuring port");
-		return PX4_ERROR;
-	}
-
-	if (tcsetattr(device_port.handle, TCSANOW, &_cfg) < 0) {
-		PX4_ERR("Error configuring port");
-		return PX4_ERROR;
-	}
-
-	return PX4_OK;
-
-}
-#endif
 
 void CvIns::cb_accel(void *user, const mip_field *field, timestamp_type timestamp)
 {
@@ -219,28 +180,21 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 
 	*timestamp_out = hrt_absolute_time();
 
-#ifdef USING_MODALIO_UART
 	int res = device_uart.uart_read(buffer, max_length);
 
 	if (res == -1 && errno != EAGAIN) {
-		// PX4_INFO("RX 1 %d(%d)",res,max_length);
+		PX4_DEBUG("RX 1 %d(%d)",res,max_length);
 		*out_length = 0;
 		return false;
 	}
 
 	if (res >= 0) {
 		*out_length = res;
-		// PX4_INFO("RX 2 %d(%d)",*out_length,max_length);
+		PX4_DEBUG("RX 2 %d(%d)",*out_length,max_length);
 	}
 
-	// PX4_INFO("RX 3 %d(%d)",*out_length,max_length);
-#else
+	PX4_DEBUG("RX 3 %d(%d)",*out_length,max_length);
 
-	if (!serial_port_read(&device_port, buffer, max_length, out_length)) {
-		return false;
-	}
-
-#endif
 #ifdef LOG_TRANSACTIONS
 
 	if (cv7_ins) {
@@ -266,8 +220,8 @@ bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint
 	}
 
 #endif
-#ifdef USING_MODALIO_UART
-	PX4_INFO("TX %d", length);
+
+	PX4_DEBUG("TX %d", length);
 	int res = device_uart.uart_write(const_cast<uint8_t *>(data), length);
 
 	if (res >= 0) {
@@ -275,10 +229,7 @@ bool mip::C::mip_interface_user_send_to_device(mip_interface *device, const uint
 	}
 
 	return false;
-#else
-	size_t bytes_written {0};
-	return serial_port_write(&device_port, data, length, &bytes_written);
-#endif
+
 }
 
 CvIns::CvIns(const char *uart_port, int32_t rot) :
@@ -310,19 +261,9 @@ CvIns::CvIns(const char *uart_port, int32_t rot) :
 
 CvIns::~CvIns()
 {
-#ifdef USING_MODALIO_UART
-
 	if (device_uart.is_open()) {
 		device_uart.uart_close();
 	}
-
-#else
-
-	if (serial_port_is_open(&device_port)) {
-		serial_port_close(&device_port);
-	}
-
-#endif
 
 #ifdef LOG_TRANSACTIONS
 	_logger.thread_stop();
@@ -370,8 +311,6 @@ void CvIns::set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t le
 
 int CvIns::connect_at_baud(int32_t baud)
 {
-#ifdef USING_MODALIO_UART
-
 	if (device_uart.is_open()) {
 		if (device_uart.uart_set_baud(baud) == PX4_ERROR) {
 			PX4_INFO(" - Failed to set UART %" PRIu32 " baud", baud);
@@ -384,24 +323,6 @@ int CvIns::connect_at_baud(int32_t baud)
 	}
 
 	PX4_INFO("Serial Port %s with baud of %" PRIu32 " baud", (device_uart.is_open() ? "CONNECTED" : "NOT CONNECTED"), baud);
-#else
-
-	if (device_port.is_open) {
-		if (set_uart_baud(baud) == PX4_ERROR) {
-			PX4_INFO(" - Failed to set UART %" PRIu32 " baud", baud);
-		}
-
-	} else if (!serial_port_open(&device_port, _uart_device, baud)) {
-		PX4_INFO(" - Failed to open UART");
-		PX4_ERR("ERROR: Could not open device port!");
-		return PX4_ERROR;
-	}
-
-	PX4_INFO("Serial Port %s with baud of %" PRIu32 " baud", (device_port.is_open ? "CONNECTED" : "NOT CONNECTED"), baud);
-#endif
-
-
-
 
 	// Re-init the interface with the correct timeouts
 	mip_interface_init(&device, parse_buffer, sizeof(parse_buffer), mip_timeout_from_baudrate(baud) * 1_ms, 250_ms);
@@ -485,11 +406,7 @@ void CvIns::initialize_cv7()
 		return;
 	}
 
-#ifdef USING_MODALIO_UART
 	tcflush(device_uart.uart_get_fd(), TCIOFLUSH);
-#else
-	tcflush(device_port.handle, TCIOFLUSH);
-#endif
 
 	usleep(500_ms);
 
@@ -705,12 +622,8 @@ int CvIns::task_spawn(int argc, char *argv[])
 
 int CvIns::print_status()
 {
-#ifdef USING_MODALIO_UART
 	PX4_INFO_RAW("Serial Port Open %d Handle %d Device %s\n", device_uart.is_open(), device_uart.uart_get_fd(),
 		     _uart_device);
-#else
-	PX4_INFO_RAW("Serial Port Open %d Handle %d Device %s\n", device_port.is_open, device_port.handle, _uart_device);
-#endif
 	PX4_INFO_RAW("Min %lu\n", _debug_rx_bytes[0]);
 	PX4_INFO_RAW("Total %lu\n", _debug_rx_bytes[1]);
 	PX4_INFO_RAW("Max %lu\n", _debug_rx_bytes[2]);
@@ -740,11 +653,13 @@ int CvIns::print_usage(const char *reason)
 	PRINT_MODULE_DESCRIPTION(
 		R"DESCR_STR(
 ### Description
-Example of a simple module running out of a work queue.
+CV7 IMU Driver.
+
+Communicates over serial port an utilizes the manufacturer provided MIP SDK.
 
 )DESCR_STR");
 
-	PRINT_MODULE_USAGE_NAME("cv7_ins", "template");
+	PRINT_MODULE_USAGE_NAME("cv7_ins", "driver");
 	PRINT_MODULE_USAGE_COMMAND("start");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 	PRINT_MODULE_USAGE_PARAM_STRING('d', "/dev/ttyS2", "<file:dev>", "CV7 Port", true);

@@ -67,13 +67,7 @@ using namespace mip::C;
 
 using namespace time_literals;
 
-#define USING_MODALIO_UART
-
-#ifdef USING_MODALIO_UART
 #include "modal_io_serial.hpp"
-#endif
-
-
 
 class CvIns : public ModuleBase<CvIns>, public ModuleParams, public px4::ScheduledWorkItem
 {
