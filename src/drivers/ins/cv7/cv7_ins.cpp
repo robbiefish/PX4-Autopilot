@@ -121,7 +121,8 @@ void CvIns::cb_baro(void *user, const mip_field *field, timestamp_type timestamp
 	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_pressure_data data;
 
-	PX4_DEBUG("[BARO] Now %" PRIu64 " Then %" PRIu64 " Elapsed %" PRIu64, hrt_absolute_time(), timestamp, hrt_elapsed_time(&timestamp));
+	PX4_DEBUG("[BARO] Now %" PRIu64 " Then %" PRIu64 " Elapsed %" PRIu64, hrt_absolute_time(), timestamp,
+		  hrt_elapsed_time(&timestamp));
 
 	if (extract_mip_sensor_scaled_pressure_data_from_field(field, &data)) {
 		ref->_baro.update_sample(data);
