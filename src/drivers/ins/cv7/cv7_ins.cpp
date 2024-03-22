@@ -102,7 +102,7 @@ void CvIns::handleAccel(void *user, const mip_field *field, timestamp_type times
 		// auto t = hrt_absolute_time(); // timestamp;
 		// ref->_px4_accel.update(t, data.scaled_accel[0]*CONSTANTS_ONE_G, data.scaled_accel[1]*CONSTANTS_ONE_G,
 		// 		       data.scaled_accel[2]*CONSTANTS_ONE_G);
-		// ref->_time_last_valid_imu_us = t;
+		// ref->_last_imu_time = t;
 	}
 }
 
@@ -120,7 +120,7 @@ void CvIns::handleGyro(void *user, const mip_field *field, timestamp_type timest
 		// 	  (double)data.scaled_gyro[2]);
 		// auto t = hrt_absolute_time(); // timestamp;
 		// ref->_px4_gyro.update(t, data.scaled_gyro[0], data.scaled_gyro[1], data.scaled_gyro[2]);
-		// ref->_time_last_valid_imu_us = t;
+		// ref->_last_imu_time = t;
 	}
 }
 
@@ -198,13 +198,13 @@ void CvIns::handleTimestamp(void *user, const mip_field *field, timestamp_type t
 		if(ref->_accel.updated){
 			ref->_px4_accel.update(t, ref->_accel.sample.scaled_accel[0]*CONSTANTS_ONE_G, ref->_accel.sample.scaled_accel[1]*CONSTANTS_ONE_G,
 					       ref->_accel.sample.scaled_accel[2]*CONSTANTS_ONE_G);
-			ref->_time_last_valid_imu_us = t;
+			ref->_last_imu_time = t;
 			ref->_accel.updated = false;
 		}
 
 		if(ref->_gyro.updated){
 			ref->_px4_gyro.update(t, ref->_gyro.sample.scaled_gyro[0], ref->_gyro.sample.scaled_gyro[1], ref->_gyro.sample.scaled_gyro[2]);
-			ref->_time_last_valid_imu_us = t;
+			ref->_last_imu_time = t;
 			ref->_gyro.updated = false;
 		}
 
@@ -272,10 +272,10 @@ bool mip::C::mip_interface_user_recv_from_device(mip_interface *device, uint8_t 
 	}
 
 #endif
-	cv7_ins->_read_bytes[0] = math::min<uint32_t>(cv7_ins->_read_bytes[0],*out_length);
-	cv7_ins->_read_bytes[1] += *out_length;
-	cv7_ins->_read_bytes[2] = math::max<uint32_t>(cv7_ins->_read_bytes[2],*out_length);
-	cv7_ins->_read_bytes[3]++;
+	cv7_ins->_debug_rx_bytes[0] = math::min<uint32_t>(cv7_ins->_debug_rx_bytes[0],*out_length);
+	cv7_ins->_debug_rx_bytes[1] += *out_length;
+	cv7_ins->_debug_rx_bytes[2] = math::max<uint32_t>(cv7_ins->_debug_rx_bytes[2],*out_length);
+	cv7_ins->_debug_rx_bytes[3]++;
 	return true;
 }
 
@@ -308,23 +308,23 @@ CvIns::CvIns(const char *uart_port, int32_t rot) :
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::test1)
 {
 	_uart_device = uart_port;
-	_config._rot = static_cast<Rotation>(rot);
+	_config.rot = static_cast<Rotation>(rot);
 	// TODO: Figure out how to set to arbitrary rates, currently it limited based on decimation
 	// // Clamp rate to allowable ranges
-	// _config._sens_imu_update_rate_hz = math::constrain<uint16_t>(_param_imu_gyro_ratemax.get(),100,1000);
+	// _config.sens_imu_update_rate_hz = math::constrain<uint16_t>(_param_imu_gyro_ratemax.get(),100,1000);
 
 	device::Device::DeviceId device_id{};
 	device_id.devid_s.devtype = DRV_INS_DEVTYPE_3DMCV7;
 	device_id.devid_s.bus_type = device::Device::DeviceBusType_SERIAL;
 	device_id.devid_s.bus = 2;
-	_config._device_id = device_id.devid;
+	_config.device_id = device_id.devid;
 	// Default to ROTATION_NONE
-	_px4_accel.set_device_id(_config._device_id);
-	_px4_gyro.set_device_id(_config._device_id);
-	_px4_mag.set_device_id(_config._device_id);
+	_px4_accel.set_device_id(_config.device_id);
+	_px4_gyro.set_device_id(_config.device_id);
+	_px4_mag.set_device_id(_config.device_id);
 
 	// Set the default values for the baro (which may not change)
-	_sensor_baro.device_id = _config._device_id;
+	_sensor_baro.device_id = _config.device_id;
 	_sensor_baro.pressure = 0;
 	_sensor_baro.temperature = 0;
 	_sensor_baro.error_count = 0;
@@ -521,15 +521,15 @@ void CvIns::initialize_cv7()
 		}
 	}
 
-	switch (_config._selected_mode) {
+	switch (_config.selected_mode) {
 	case mode_imu: {
 			// Scaled Gyro and Accel at a high rate
 			mip_descriptor_rate imu_sensors[5] = {
-				{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, _config._sens_imu_update_rate_hz},
-				{ MIP_DATA_DESC_SENSOR_GYRO_SCALED, _config._sens_imu_update_rate_hz},
-				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,  _config._sens_other_update_rate_hz},
-				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, _config._sens_other_update_rate_hz},
-				{ MIP_DATA_DESC_SHARED_REFERENCE_TIME, _config._sens_imu_update_rate_hz},
+				{ MIP_DATA_DESC_SENSOR_ACCEL_SCALED, _config.sens_imu_update_rate_hz},
+				{ MIP_DATA_DESC_SENSOR_GYRO_SCALED, _config.sens_imu_update_rate_hz},
+				{ MIP_DATA_DESC_SENSOR_MAG_SCALED,  _config.sens_other_update_rate_hz},
+				{ MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, _config.sens_other_update_rate_hz},
+				{ MIP_DATA_DESC_SHARED_REFERENCE_TIME, _config.sens_imu_update_rate_hz},
 
 			};
 
@@ -658,9 +658,9 @@ void CvIns::initialize_cv7()
 	// Setup the rotation based on PX4 standard rotation sets
 	//
 
-	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, math::radians<float>(rot_lookup[_config._rot].roll),
-			math::radians<float>(rot_lookup[_config._rot].pitch),
-			math::radians<float>(rot_lookup[_config._rot].yaw)) != MIP_ACK_OK) {
+	if (mip_3dm_write_sensor_2_vehicle_transform_euler(&device, math::radians<float>(rot_lookup[_config.rot].roll),
+			math::radians<float>(rot_lookup[_config.rot].pitch),
+			math::radians<float>(rot_lookup[_config.rot].yaw)) != MIP_ACK_OK) {
 		PX4_ERR("ERROR: Could not set sensor-to-vehicle transformation!");
 		return;
 	}
@@ -688,7 +688,7 @@ void CvIns::service_cv7()
 {
 	mip_interface_update(&device, false);
 
-	switch (_config._selected_mode) {
+	switch (_config.selected_mode) {
 	case mode_ins:
 		// Feed any aiding information into the driver here
 		break;
@@ -814,14 +814,14 @@ int CvIns::print_status()
 	#else
 	PX4_INFO_RAW("Serial Port Open %d Handle %d Device %s\n", device_port.is_open, device_port.handle, _uart_device);
 	#endif
-	PX4_INFO_RAW("Min %lu\n",_read_bytes[0]);
-	PX4_INFO_RAW("Total %lu\n",_read_bytes[1]);
-	PX4_INFO_RAW("Max %lu\n",_read_bytes[2]);
-	PX4_INFO_RAW("Avg %f\n",static_cast<double>(_read_bytes[1]*1.f / _read_bytes[3]*1.f));
-	_read_bytes[0] = UINT32_MAX;
+	PX4_INFO_RAW("Min %lu\n",_debug_rx_bytes[0]);
+	PX4_INFO_RAW("Total %lu\n",_debug_rx_bytes[1]);
+	PX4_INFO_RAW("Max %lu\n",_debug_rx_bytes[2]);
+	PX4_INFO_RAW("Avg %f\n",static_cast<double>(_debug_rx_bytes[1]*1.f / _debug_rx_bytes[3]*1.f));
+	_debug_rx_bytes[0] = UINT32_MAX;
 	for (int i = 1; i < 4; i++)
 	{
-		_read_bytes[i] = 0;
+		_debug_rx_bytes[i] = 0;
 	}
 
 	perf_print_counter(_loop_perf);

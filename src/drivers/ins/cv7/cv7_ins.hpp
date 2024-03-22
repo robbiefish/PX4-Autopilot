@@ -72,20 +72,26 @@ using namespace time_literals;
 #include "modal_io_serial.hpp"
 #endif
 
-// bool mip_interface_user_recv_from_device(mip_interface* device, uint8_t* buffer, size_t max_length, size_t* out_length, timestamp_type* timestamp_out);
-
 class CvIns : public ModuleBase<CvIns>, public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
 	CvIns(const char *device, int32_t rotation);
 	~CvIns() override;
 
+	/* Callbacks */
+
+	// Sensor Callbacks
 	static void handleAccel(void *user, const mip_field *field, timestamp_type timestamp);
 	static void handleGyro(void *user, const mip_field *field, timestamp_type timestamp);
 	static void handleMag(void *user, const mip_field *field, timestamp_type timestamp);
 	static void handleBaro(void *user, const mip_field *field, timestamp_type timestamp);
-	hrt_abstime get_sample_timestamp(timestamp_type decode_timestamp, mip_shared_reference_timestamp_data ref_time);
+
+	// Common Callback/s
 	static void handleTimestamp(void * user, const mip_field * field, timestamp_type timestamp);
+
+
+	hrt_abstime get_sample_timestamp(timestamp_type decode_timestamp, mip_shared_reference_timestamp_data ref_time);
+
 
 	/** @see ModuleBase */
 	static int task_spawn(int argc, char *argv[]);
@@ -96,24 +102,28 @@ public:
 	/** @see ModuleBase */
 	static int print_usage(const char *reason = nullptr);
 
+	/** @see ModuleBase */
+	int print_status() override;
+
 	bool init();
 
 	void set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t len);
 
 	int connect_at_baud(int32_t baud);
 
-	int print_status() override;
+	LogWriter &get_logger()	{ return _logger; }
 
-	LogWriter &get_logger()
-	{
-		return _logger;
-	}
-
-	hrt_abstime _time_last_valid_imu_us{0};
+	hrt_abstime _last_imu_time{0};
 private:
+	/** @see ModuleBase */
 	void Run() override;
+
+	/// @brief Attempt to connect to the CV7 and set in known configuration
 	void initialize_cv7();
+
+	/// @brief Runs the mip sdk and generate aiding sources
 	void service_cv7();
+
 	void initialize_logger();
 
 	enum cv7_mode {
@@ -123,11 +133,11 @@ private:
 	};
 
 	struct cv7_configuration {
-		enum cv7_mode _selected_mode = mode_imu;
-		uint16_t _sens_imu_update_rate_hz = 500;
-		uint16_t _sens_other_update_rate_hz = 50;
-		enum Rotation _rot = ROTATION_NONE;
-		uint32_t _device_id{0};
+		enum cv7_mode selected_mode = mode_imu;
+		uint16_t sens_imu_update_rate_hz = 250;
+		uint16_t sens_other_update_rate_hz = 50;
+		enum Rotation rot = ROTATION_NONE;
+		uint32_t device_id{0};
 	};
 
 	cv7_configuration _config;
@@ -142,11 +152,12 @@ private:
 	ext_sample<mip_sensor_scaled_mag_data> _mag{0};
 	ext_sample<mip_sensor_scaled_pressure_data> _baro{0};
 
+	// Sensor types needed for message creation / updating / publishing
 	PX4Accelerometer _px4_accel{0};
 	PX4Gyroscope _px4_gyro{0};
 	PX4Magnetometer _px4_mag{0};
-
 	sensor_baro_s _sensor_baro{0};
+
 
 	// Publications
 	uORB::PublicationMulti<sensor_baro_s> _sensor_baro_pub{ORB_ID(sensor_baro)};
@@ -163,23 +174,17 @@ private:
 
 	// Parameters
 	DEFINE_PARAMETERS(
-		(ParamInt<px4::params::SYS_AUTOSTART>) _param_sys_autostart,   /**< example parameter */
-		(ParamInt<px4::params::SYS_AUTOCONFIG>) _param_sys_autoconfig,  /**< another parameter */
 		(ParamInt<px4::params::IMU_GYRO_RATEMAX>) _param_imu_gyro_ratemax
 	)
 	LogWriter _logger;
-	bool _armed{false};
 	uint8_t parse_buffer[2048];
 	bool _is_initialized{false};
 	bool _is_init_failed{false};
-	hrt_abstime _last_print{0};
-	hrt_abstime _sensor_sample_time{0};
-	public:uint32_t _read_bytes[4]{0};
+	public:uint32_t _debug_rx_bytes[4]{0};
 
 
 
 	/******************************/
-	uint8_t _state{0};
 	mip::C::mip_interface device;
 
 	// Handlers
@@ -197,7 +202,6 @@ private:
 	mip_filter_status_data        filter_status;
 	mip_filter_euler_angles_data  filter_euler_angles;
 
-	bool filter_state_ahrs = false;
 	const char *_uart_device;
 	int64_t _cv7_offset_time{0};
 
