@@ -90,27 +90,6 @@ void CvIns::cb_baro(void *user, const mip_field *field, timestamp_type timestamp
 	}
 }
 
-hrt_abstime CvIns::get_sample_timestamp(timestamp_type decode_timestamp, mip_shared_reference_timestamp_data ref_time)
-{
-	hrt_abstime t{0};
-	// TODO: Handle the offset between system time and this timestamp
-	t = ref_time.nanoseconds / 1000;
-
-	// Compute the offset first time through
-	if (_cv7_offset_time == 0) {
-		PX4_INFO("Device Time Setup");
-		PX4_INFO("Now %" PRIu64, decode_timestamp);
-		PX4_INFO("Device Time %" PRIu64, t);
-		_cv7_offset_time = decode_timestamp - t - 1900_us;
-		PX4_INFO("Computed Offset %" PRId64, _cv7_offset_time);
-	}
-
-	// Adjsut the time to px4 relative time
-	t += _cv7_offset_time;
-
-	return t;
-}
-
 void CvIns::cb_ref_timestamp(void *user, const mip_field *field, timestamp_type timestamp)
 {
 	CvIns *ref = static_cast<CvIns *>(user);
@@ -119,7 +98,6 @@ void CvIns::cb_ref_timestamp(void *user, const mip_field *field, timestamp_type 
 	if (extract_mip_shared_reference_timestamp_data_from_field(field, &data)) {
 
 		// Convert to a useful time for PX4
-		// auto t = ref->get_sample_timestamp(timestamp, data);		// Causes timestamps duplications (buffer too full?)
 		// auto t = timestamp - 1900_us;				// Packets are then ~4ms old and timestamp duplications
 		auto t = hrt_absolute_time() - 1900_us;				// Packets are then ~2ms old
 		// auto t = hrt_absolute_time();				// Packets are old but system thinks they are new

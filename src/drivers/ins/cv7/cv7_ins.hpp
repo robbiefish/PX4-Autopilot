@@ -86,8 +86,6 @@ public:
 	// Common Callback/s
 	static void cb_ref_timestamp(void *user, const mip_field *field, timestamp_type timestamp);
 
-	hrt_abstime get_sample_timestamp(timestamp_type decode_timestamp, mip_shared_reference_timestamp_data ref_time);
-
 	/** @see ModuleBase */
 	static int task_spawn(int argc, char *argv[]);
 
