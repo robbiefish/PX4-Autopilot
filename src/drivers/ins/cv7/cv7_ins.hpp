@@ -61,6 +61,7 @@
 #include "mip_sdk/src/mip/utils/serial_port.h"
 
 #include "LogWriter.hpp"
+#include <containers/Array.hpp>
 
 using namespace mip::C;
 
@@ -71,6 +72,8 @@ using namespace time_literals;
 #ifdef USING_MODALIO_UART
 #include "modal_io_serial.hpp"
 #endif
+
+
 
 class CvIns : public ModuleBase<CvIns>, public ModuleParams, public px4::ScheduledWorkItem
 {
@@ -87,7 +90,7 @@ public:
 	static void cb_baro(void *user, const mip_field *field, timestamp_type timestamp);
 
 	// Common Callback/s
-	static void cb_ref_timestamp(void * user, const mip_field * field, timestamp_type timestamp);
+	static void cb_ref_timestamp(void *user, const mip_field *field, timestamp_type timestamp);
 
 	hrt_abstime get_sample_timestamp(timestamp_type decode_timestamp, mip_shared_reference_timestamp_data ref_time);
 
@@ -108,6 +111,8 @@ public:
 	LogWriter &get_logger()	{ return _logger; }
 
 	void update_imu_sample_time(hrt_abstime t) { _last_imu_time = t; }
+
+	uint32_t _debug_rx_bytes[4] {0};
 
 private:
 	/** @see ModuleBase */
@@ -142,7 +147,7 @@ private:
 	cv7_configuration _config;
 
 	template <typename T>
-	struct ext_sample{
+	struct ext_sample {
 		T sample;
 		bool updated;
 
@@ -175,7 +180,6 @@ private:
 	uint8_t parse_buffer[2048];
 	bool _is_initialized{false};
 	bool _is_init_failed{false};
-	public:uint32_t _debug_rx_bytes[4]{0};
 
 	/******************************/
 	mip::C::mip_interface device;
