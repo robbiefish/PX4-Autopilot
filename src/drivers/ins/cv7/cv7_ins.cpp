@@ -86,15 +86,14 @@ int set_uart_baud(int speed)
 }
 #endif
 
-void CvIns::handleAccel(void *user, const mip_field *field, timestamp_type timestamp)
+void CvIns::cb_accel(void *user, const mip_field *field, timestamp_type timestamp)
 {
 	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_accel_data data;
 
 	if (extract_mip_sensor_scaled_accel_data_from_field(field, &data)) {
 		// Update the data structure
-		ref->_accel.sample = data;
-		ref->_accel.updated = true;
+		ref->_accel.update_sample(data);
 
 		// PX4_DEBUG("Accel Data: %f %f %f", (double)data.scaled_accel[0], (double)data.scaled_accel[1],
 		// 	  (double)data.scaled_accel[2]);
@@ -106,15 +105,14 @@ void CvIns::handleAccel(void *user, const mip_field *field, timestamp_type times
 	}
 }
 
-void CvIns::handleGyro(void *user, const mip_field *field, timestamp_type timestamp)
+void CvIns::cb_gyro(void *user, const mip_field *field, timestamp_type timestamp)
 {
 	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_gyro_data data;
 
 	if (extract_mip_sensor_scaled_gyro_data_from_field(field, &data)) {
 		// Update the data structure
-		ref->_gyro.sample = data;
-		ref->_gyro.updated = true;
+		ref->_gyro.update_sample(data);
 
 		// PX4_DEBUG("Gyro Data:  %f, %f, %f", (double)data.scaled_gyro[0], (double)data.scaled_gyro[1],
 		// 	  (double)data.scaled_gyro[2]);
@@ -124,15 +122,15 @@ void CvIns::handleGyro(void *user, const mip_field *field, timestamp_type timest
 	}
 }
 
-void CvIns::handleMag(void *user, const mip_field *field, timestamp_type timestamp)
+void CvIns::cb_mag(void *user, const mip_field *field, timestamp_type timestamp)
 {
 	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_mag_data data;
 
 	if (extract_mip_sensor_scaled_mag_data_from_field(field, &data)) {
 		// Update the data structure
-		ref->_mag.sample = data;
-		ref->_mag.updated = true;
+		ref->_mag.update_sample(data);
+
 
 		// PX4_DEBUG("Mag Data:   %f, %f, %f", (double)data.scaled_mag[0], (double)data.scaled_mag[1], (double)data.scaled_mag[2]);
 		// auto t =  timestamp;; //hrt_absolute_time()
@@ -140,7 +138,7 @@ void CvIns::handleMag(void *user, const mip_field *field, timestamp_type timesta
 	}
 }
 
-void CvIns::handleBaro(void *user, const mip_field *field, timestamp_type timestamp)
+void CvIns::cb_baro(void *user, const mip_field *field, timestamp_type timestamp)
 {
 	CvIns *ref = static_cast<CvIns *>(user);
 	mip_sensor_scaled_pressure_data data;
@@ -149,8 +147,8 @@ void CvIns::handleBaro(void *user, const mip_field *field, timestamp_type timest
 
 	if (extract_mip_sensor_scaled_pressure_data_from_field(field, &data)) {
 		// Update the data structure
-		ref->_baro.sample = data;
-		ref->_baro.updated = true;
+		ref->_baro.update_sample(data);
+
 
 		// ref->_sensor_baro.timestamp = hrt_absolute_time();
 		// ref->_sensor_baro.timestamp_sample = hrt_absolute_time();
@@ -179,7 +177,7 @@ hrt_abstime CvIns::get_sample_timestamp(timestamp_type decode_timestamp, mip_sha
 	return t;
 }
 
-void CvIns::handleTimestamp(void *user, const mip_field *field, timestamp_type timestamp)
+void CvIns::cb_ref_timestamp(void *user, const mip_field *field, timestamp_type timestamp)
 {
 	CvIns *ref = static_cast<CvIns *>(user);
 	mip_shared_reference_timestamp_data data;
@@ -198,13 +196,13 @@ void CvIns::handleTimestamp(void *user, const mip_field *field, timestamp_type t
 		if(ref->_accel.updated){
 			ref->_px4_accel.update(t, ref->_accel.sample.scaled_accel[0]*CONSTANTS_ONE_G, ref->_accel.sample.scaled_accel[1]*CONSTANTS_ONE_G,
 					       ref->_accel.sample.scaled_accel[2]*CONSTANTS_ONE_G);
-			ref->_last_imu_time = t;
+			ref->update_imu_sample_time(t);
 			ref->_accel.updated = false;
 		}
 
 		if(ref->_gyro.updated){
 			ref->_px4_gyro.update(t, ref->_gyro.sample.scaled_gyro[0], ref->_gyro.sample.scaled_gyro[1], ref->_gyro.sample.scaled_gyro[2]);
-			ref->_last_imu_time = t;
+			ref->update_imu_sample_time(t);
 			ref->_gyro.updated = false;
 		}
 
@@ -539,114 +537,24 @@ void CvIns::initialize_cv7()
 			// Register data callbacks
 			//
 			mip_interface_register_field_callback(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
-							      MIP_DATA_DESC_SENSOR_ACCEL_SCALED, &handleAccel, this);
+							      MIP_DATA_DESC_SENSOR_ACCEL_SCALED, &cb_accel, this);
 			mip_interface_register_field_callback(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET,
-							      MIP_DATA_DESC_SENSOR_GYRO_SCALED, &handleGyro, this);
+							      MIP_DATA_DESC_SENSOR_GYRO_SCALED, &cb_gyro, this);
 			mip_interface_register_field_callback(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET,
-							      MIP_DATA_DESC_SENSOR_MAG_SCALED, &handleMag, this);
+							      MIP_DATA_DESC_SENSOR_MAG_SCALED, &cb_mag, this);
 			mip_interface_register_field_callback(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET,
-							      MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, &handleBaro, this);
+							      MIP_DATA_DESC_SENSOR_PRESSURE_SCALED, &cb_baro, this);
 			mip_interface_register_field_callback(&device, &sensor_data_handlers[4], MIP_SHARED_DATA_DESC_SET,
-							      MIP_DATA_DESC_SHARED_REFERENCE_TIME, &handleTimestamp, this);
-
-			mip_interface_register_extractor(&device, &sensor_data_handlers[5], MIP_SHARED_DATA_DESC_SET,
-							 MIP_DATA_DESC_SHARED_REFERENCE_TIME,     extract_mip_shared_reference_timestamp_data_from_field,
-							 &sensor_reference_time);
-
-			// uint16_t shared_data_base_rate{1000};
-
-			// mip_cmd_result res = mip_3dm_get_base_rate(&device, MIP_SHARED_DATA_DESC_SET, &shared_data_base_rate);
-			// if (res != MIP_ACK_OK) {
-			// 	PX4_ERR("ERROR: Could not get filter base rate format! Result of %d -- continuing", res);
-			// }
-			// 	// { MIP_DATA_DESC_SENSOR_TIME_STAMP_INTERNAL, 50 },
-			// const uint16_t shared_sample_rate = 10; // Hz
-			// const uint16_t filter_decimation = shared_data_base_rate / shared_sample_rate;
-
-			// const mip_descriptor_rate shared_sample_descriptors[1] = {
-			// 	{ MIP_DATA_DESC_SHARED_REFERENCE_TIME,         filter_decimation }
-			// };
-
-			// mip_cmd_result res = mip_3dm_write_message_format(&device, MIP_SHARED_DATA_DESC_SET, 1, shared_sample_descriptors);
-			// if ( res!= MIP_ACK_OK) {
-			// 	PX4_ERR("ERROR: Could not set shared message format! Result of %d", res);
-			// 	return;
-			// }
+							      MIP_DATA_DESC_SHARED_REFERENCE_TIME, &cb_ref_timestamp, this);
 
 		}
 		break;
 
 	case mode_ahrs: {
-			//
-			//Setup FILTER data format
-			//
-
-			uint16_t filter_base_rate;
-
-			if (mip_3dm_get_base_rate(&device, MIP_FILTER_DATA_DESC_SET, &filter_base_rate) != MIP_ACK_OK) {
-				PX4_ERR("ERROR: Could not get filter base rate format!");
-				return;
-			}
-
-			const uint16_t filter_sample_rate = 10; // Hz
-			const uint16_t filter_decimation = filter_base_rate / filter_sample_rate;
-
-			const mip_descriptor_rate filter_descriptors[3] = {
-				{ MIP_DATA_DESC_SHARED_GPS_TIME,         filter_decimation },
-				{ MIP_DATA_DESC_FILTER_FILTER_STATUS,    filter_decimation },
-				{ MIP_DATA_DESC_FILTER_ATT_EULER_ANGLES, filter_decimation },
-			};
-
-			if (mip_3dm_write_message_format(&device, MIP_FILTER_DATA_DESC_SET, 3, filter_descriptors) != MIP_ACK_OK) {
-				PX4_ERR("ERROR: Could not set filter message format!");
-				return;
-			}
-
-
-			// Filter Data
-			mip_interface_register_extractor(&device, &filter_data_handlers[0], MIP_FILTER_DATA_DESC_SET,
-							 MIP_DATA_DESC_FILTER_FILTER_TIMESTAMP, extract_mip_filter_timestamp_data_from_field, &filter_time);
-			mip_interface_register_extractor(&device, &filter_data_handlers[1], MIP_FILTER_DATA_DESC_SET,
-							 MIP_DATA_DESC_FILTER_FILTER_STATUS,    extract_mip_filter_status_data_from_field,        &filter_status);
-			mip_interface_register_extractor(&device, &filter_data_handlers[2], MIP_FILTER_DATA_DESC_SET,
-							 MIP_DATA_DESC_FILTER_ATT_EULER_ANGLES, extract_mip_filter_euler_angles_data_from_field,  &filter_euler_angles);
-			mip_interface_register_field_callback(&device, &filter_data_handlers[3], MIP_FILTER_DATA_DESC_SET,
-							      MIP_DATA_DESC_SHARED_EVENT_SOURCE, handle_filter_event_source,  NULL);
-
-			//
-			//Reset the filter (note: this is good to do after filter setup is complete)
-			//
-
-			if (mip_filter_reset(&device) != MIP_ACK_OK) {
-				PX4_ERR("ERROR: Could not reset the filter!");
-				return;
-			}
 		}
 		break;
 
 	case mode_ins: {
-			//
-			//Setup the filter aiding measurements (GNSS position/velocity)
-			//
-
-			if (mip_filter_write_aiding_measurement_enable(&device,
-					MIP_FILTER_AIDING_MEASUREMENT_ENABLE_COMMAND_AIDING_SOURCE_GNSS_POS_VEL, true) != MIP_ACK_OK) {
-				PX4_ERR("ERROR: Could not set filter aiding measurement enable!");
-				return;
-			}
-
-			//Sensor Data
-			mip_interface_register_extractor(&device, &sensor_data_handlers[0], MIP_SENSOR_DATA_DESC_SET,
-							 MIP_DATA_DESC_SHARED_REFERENCE_TIME,     extract_mip_shared_reference_timestamp_data_from_field,
-							 &sensor_reference_time);
-			mip_interface_register_extractor(&device, &sensor_data_handlers[1], MIP_SENSOR_DATA_DESC_SET,
-							 MIP_DATA_DESC_SHARED_GPS_TIME,     extract_mip_shared_gps_timestamp_data_from_field, &sensor_gps_time);
-			mip_interface_register_extractor(&device, &sensor_data_handlers[2], MIP_SENSOR_DATA_DESC_SET,
-							 MIP_DATA_DESC_SENSOR_ACCEL_SCALED, extract_mip_sensor_scaled_accel_data_from_field,  &sensor_accel);
-			mip_interface_register_extractor(&device, &sensor_data_handlers[3], MIP_SENSOR_DATA_DESC_SET,
-							 MIP_DATA_DESC_SENSOR_GYRO_SCALED,  extract_mip_sensor_scaled_gyro_data_from_field,   &sensor_gyro);
-			mip_interface_register_extractor(&device, &sensor_data_handlers[4], MIP_SENSOR_DATA_DESC_SET,
-							 MIP_DATA_DESC_SENSOR_MAG_SCALED,   extract_mip_sensor_scaled_mag_data_from_field,    &sensor_mag);
 		}
 		break;
 

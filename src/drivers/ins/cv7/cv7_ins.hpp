@@ -81,17 +81,15 @@ public:
 	/* Callbacks */
 
 	// Sensor Callbacks
-	static void handleAccel(void *user, const mip_field *field, timestamp_type timestamp);
-	static void handleGyro(void *user, const mip_field *field, timestamp_type timestamp);
-	static void handleMag(void *user, const mip_field *field, timestamp_type timestamp);
-	static void handleBaro(void *user, const mip_field *field, timestamp_type timestamp);
+	static void cb_accel(void *user, const mip_field *field, timestamp_type timestamp);
+	static void cb_gyro(void *user, const mip_field *field, timestamp_type timestamp);
+	static void cb_mag(void *user, const mip_field *field, timestamp_type timestamp);
+	static void cb_baro(void *user, const mip_field *field, timestamp_type timestamp);
 
 	// Common Callback/s
-	static void handleTimestamp(void * user, const mip_field * field, timestamp_type timestamp);
-
+	static void cb_ref_timestamp(void * user, const mip_field * field, timestamp_type timestamp);
 
 	hrt_abstime get_sample_timestamp(timestamp_type decode_timestamp, mip_shared_reference_timestamp_data ref_time);
-
 
 	/** @see ModuleBase */
 	static int task_spawn(int argc, char *argv[]);
@@ -107,13 +105,10 @@ public:
 
 	bool init();
 
-	void set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t len);
-
-	int connect_at_baud(int32_t baud);
-
 	LogWriter &get_logger()	{ return _logger; }
 
-	hrt_abstime _last_imu_time{0};
+	void update_imu_sample_time(hrt_abstime t) { _last_imu_time = t; }
+
 private:
 	/** @see ModuleBase */
 	void Run() override;
@@ -123,6 +118,10 @@ private:
 
 	/// @brief Runs the mip sdk and generate aiding sources
 	void service_cv7();
+
+	void set_sensor_rate(mip_descriptor_rate *sensor_descriptors, uint16_t len);
+
+	int connect_at_baud(int32_t baud);
 
 	void initialize_logger();
 
@@ -146,6 +145,8 @@ private:
 	struct ext_sample{
 		T sample;
 		bool updated;
+
+		void update_sample(T s) {sample = s; updated = true;}
 	};
 	ext_sample<mip_sensor_scaled_accel_data> _accel{0};
 	ext_sample<mip_sensor_scaled_gyro_data> _gyro{0};
@@ -158,51 +159,37 @@ private:
 	PX4Magnetometer _px4_mag{0};
 	sensor_baro_s _sensor_baro{0};
 
-
 	// Publications
 	uORB::PublicationMulti<sensor_baro_s> _sensor_baro_pub{ORB_ID(sensor_baro)};
 	uORB::Publication<sensor_selection_s> _sensor_selection_pub{ORB_ID(sensor_selection)};
 
 	// Subscriptions
-	uORB::SubscriptionCallbackWorkItem _sensor_accel_sub{this, ORB_ID(sensor_accel)};        // subscription that schedules CvIns when updated
 	uORB::SubscriptionInterval         _parameter_update_sub{ORB_ID(parameter_update), 1_s}; // subscription limited to 1 Hz updates
-	uORB::Subscription                 _vehicle_status_sub{ORB_ID(vehicle_status)};          // regular subscription for additional data
 
 	// Performance (perf) counters
 	perf_counter_t	_loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": cycle")};
 	perf_counter_t	_loop_interval_perf{perf_alloc(PC_INTERVAL, MODULE_NAME": interval")};
 
-	// Parameters
-	DEFINE_PARAMETERS(
-		(ParamInt<px4::params::IMU_GYRO_RATEMAX>) _param_imu_gyro_ratemax
-	)
+
 	LogWriter _logger;
 	uint8_t parse_buffer[2048];
 	bool _is_initialized{false};
 	bool _is_init_failed{false};
 	public:uint32_t _debug_rx_bytes[4]{0};
 
-
-
 	/******************************/
 	mip::C::mip_interface device;
 
 	// Handlers
 	mip_dispatch_handler sensor_data_handlers[10];
-	mip_dispatch_handler filter_data_handlers[4];
-
-	//Device data stores
-	mip_shared_reference_timestamp_data sensor_reference_time;
-	mip_shared_gps_timestamp_data sensor_gps_time;
-	mip_sensor_scaled_accel_data  sensor_accel{0};
-	mip_sensor_scaled_gyro_data   sensor_gyro{0};
-	mip_sensor_scaled_mag_data    sensor_mag{0};
-
-	mip_filter_timestamp_data     filter_time;
-	mip_filter_status_data        filter_status;
-	mip_filter_euler_angles_data  filter_euler_angles;
 
 	const char *_uart_device;
 	int64_t _cv7_offset_time{0};
 
+	hrt_abstime _last_imu_time{0};
+
+	// Parameters
+	DEFINE_PARAMETERS(
+		(ParamInt<px4::params::IMU_GYRO_RATEMAX>) _param_imu_gyro_ratemax
+	)
 };
