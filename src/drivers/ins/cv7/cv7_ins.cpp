@@ -92,16 +92,7 @@ void CvIns::cb_accel(void *user, const mip_field *field, timestamp_type timestam
 	mip_sensor_scaled_accel_data data;
 
 	if (extract_mip_sensor_scaled_accel_data_from_field(field, &data)) {
-		// Update the data structure
 		ref->_accel.update_sample(data);
-
-		// PX4_DEBUG("Accel Data: %f %f %f", (double)data.scaled_accel[0], (double)data.scaled_accel[1],
-		// 	  (double)data.scaled_accel[2]);
-
-		// auto t = hrt_absolute_time(); // timestamp;
-		// ref->_px4_accel.update(t, data.scaled_accel[0]*CONSTANTS_ONE_G, data.scaled_accel[1]*CONSTANTS_ONE_G,
-		// 		       data.scaled_accel[2]*CONSTANTS_ONE_G);
-		// ref->_last_imu_time = t;
 	}
 }
 
@@ -111,14 +102,7 @@ void CvIns::cb_gyro(void *user, const mip_field *field, timestamp_type timestamp
 	mip_sensor_scaled_gyro_data data;
 
 	if (extract_mip_sensor_scaled_gyro_data_from_field(field, &data)) {
-		// Update the data structure
 		ref->_gyro.update_sample(data);
-
-		// PX4_DEBUG("Gyro Data:  %f, %f, %f", (double)data.scaled_gyro[0], (double)data.scaled_gyro[1],
-		// 	  (double)data.scaled_gyro[2]);
-		// auto t = hrt_absolute_time(); // timestamp;
-		// ref->_px4_gyro.update(t, data.scaled_gyro[0], data.scaled_gyro[1], data.scaled_gyro[2]);
-		// ref->_last_imu_time = t;
 	}
 }
 
@@ -128,13 +112,7 @@ void CvIns::cb_mag(void *user, const mip_field *field, timestamp_type timestamp)
 	mip_sensor_scaled_mag_data data;
 
 	if (extract_mip_sensor_scaled_mag_data_from_field(field, &data)) {
-		// Update the data structure
 		ref->_mag.update_sample(data);
-
-
-		// PX4_DEBUG("Mag Data:   %f, %f, %f", (double)data.scaled_mag[0], (double)data.scaled_mag[1], (double)data.scaled_mag[2]);
-		// auto t =  timestamp;; //hrt_absolute_time()
-		// ref->_px4_mag.update(t, data.scaled_mag[0], data.scaled_mag[1], data.scaled_mag[2]);
 	}
 }
 
@@ -146,14 +124,7 @@ void CvIns::cb_baro(void *user, const mip_field *field, timestamp_type timestamp
 	// PX4_INFO("[BARO] Now %" PRIu64 " Then %" PRIu64 " Elapsed %" PRIu64, hrt_absolute_time(), timestamp, hrt_elapsed_time(&timestamp));
 
 	if (extract_mip_sensor_scaled_pressure_data_from_field(field, &data)) {
-		// Update the data structure
 		ref->_baro.update_sample(data);
-
-
-		// ref->_sensor_baro.timestamp = hrt_absolute_time();
-		// ref->_sensor_baro.timestamp_sample = hrt_absolute_time();
-		// ref->_sensor_baro.pressure = data.scaled_pressure * 100.f; // convert [Pa] to [mBar]
-		// ref->_sensor_baro_pub.publish(ref->_sensor_baro);
 	}
 }
 
