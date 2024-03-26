@@ -130,7 +130,7 @@ private:
 
 	struct cv7_configuration {
 		enum cv7_mode selected_mode = mode_imu;
-		uint16_t sens_imu_update_rate_hz = 250;
+		uint16_t sens_imu_update_rate_hz = 500;
 		uint16_t sens_other_update_rate_hz = 50;
 		enum Rotation rot = ROTATION_NONE;
 		uint32_t device_id{0};
