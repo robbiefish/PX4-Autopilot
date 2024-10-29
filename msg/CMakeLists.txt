@@ -58,6 +58,7 @@ set(msg_files
 	CameraCapture.msg
 	CameraStatus.msg
 	CameraTrigger.msg
+	CanInterfaceStatus.msg
 	CellularStatus.msg
 	CollisionConstraints.msg
 	CollisionReport.msg
@@ -70,9 +71,9 @@ set(msg_files
 	DebugKeyValue.msg
 	DebugValue.msg
 	DebugVect.msg
-	DifferentialDriveSetpoint.msg
 	DifferentialPressure.msg
 	DistanceSensor.msg
+	DistanceSensorModeChangeRequest.msg
 	Ekf2Timestamps.msg
 	EscReport.msg
 	EscStatus.msg
@@ -97,8 +98,10 @@ set(msg_files
 	FollowTarget.msg
 	FollowTargetEstimator.msg
 	FollowTargetStatus.msg
+	FuelTankStatus.msg
 	GeneratorStatus.msg
 	GeofenceResult.msg
+	GeofenceStatus.msg
 	GimbalControls.msg
 	GimbalDeviceAttitudeStatus.msg
 	GimbalDeviceInformation.msg
@@ -144,15 +147,24 @@ set(msg_files
 	MountOrientation.msg
 	ModeCompleted.msg
 	NavigatorMissionItem.msg
+	NavigatorStatus.msg
 	NormalizedUnsignedSetpoint.msg
 	NpfgStatus.msg
 	ObstacleDistance.msg
 	OffboardControlMode.msg
 	OnboardComputerStatus.msg
+	OpenDroneIdArmStatus.msg
+	OpenDroneIdOperatorId.msg
+	OpenDroneIdSelfId.msg
+	OpenDroneIdSystem.msg
 	OrbitStatus.msg
 	OrbTest.msg
 	OrbTestLarge.msg
 	OrbTestMedium.msg
+	ParameterResetRequest.msg
+	ParameterSetUsedRequest.msg
+	ParameterSetValueRequest.msg
+	ParameterSetValueResponse.msg
 	ParameterUpdate.msg
 	Ping.msg
 	PositionControllerLandingStatus.msg
@@ -172,6 +184,14 @@ set(msg_files
 	RcParameterMap.msg
 	RegisterExtComponentReply.msg
 	RegisterExtComponentRequest.msg
+	RoverAckermannGuidanceStatus.msg
+	RoverAckermannStatus.msg
+	RoverDifferentialGuidanceStatus.msg
+	RoverDifferentialSetpoint.msg
+	RoverDifferentialStatus.msg
+	RoverMecanumGuidanceStatus.msg
+	RoverMecanumSetpoint.msg
+	RoverMecanumStatus.msg
 	Rpm.msg
 	RtlStatus.msg
 	RtlTimeEstimate.msg
@@ -283,6 +303,9 @@ foreach(msg_file ${msg_files})
 	list(APPEND uorb_ucdr_headers ${ucdr_out_path}/${msg}.h)
 	list(APPEND uorb_json_files ${msg_source_out_path}/${msg}.json)
 endforeach()
+
+# set parent scope msg_files for ROS
+set(msg_files ${msg_files} PARENT_SCOPE)
 
 # Generate uORB headers
 add_custom_command(

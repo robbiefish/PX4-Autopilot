@@ -46,42 +46,26 @@
 #include "mission_feasibility_checker.h"
 #include "navigator.h"
 
-MissionBase::MissionBase(Navigator *navigator, int32_t dataman_cache_size_signed) :
-	MissionBlock(navigator),
+MissionBase::MissionBase(Navigator *navigator, int32_t dataman_cache_size_signed, uint8_t navigator_state_id) :
+	MissionBlock(navigator, navigator_state_id),
 	ModuleParams(navigator),
 	_dataman_cache_size_signed(dataman_cache_size_signed)
 {
 	_dataman_cache.resize(abs(dataman_cache_size_signed));
-	_is_current_planned_mission_item_valid = (initMission() == PX4_OK);
 
-	updateDatamanCache();
+	// Reset _mission here, and listen on changes on the uorb topic instead of initialize from dataman.
+	_mission.mission_dataman_id = DM_KEY_WAYPOINTS_OFFBOARD_0;
+	_mission.fence_dataman_id = DM_KEY_FENCE_POINTS_0;
+	_mission.safepoint_dataman_id = DM_KEY_SAFE_POINTS_0;
+	_mission.count = 0;
+	_mission.current_seq = 0;
+	_mission.land_start_index = -1;
+	_mission.land_index = -1;
+	_mission.mission_id = 0;
+	_mission.geofence_id = 0;
+	_mission.safe_points_id = 0;
 
 	_mission_pub.advertise();
-}
-
-int MissionBase::initMission()
-{
-	mission_s mission;
-	int ret_val{PX4_ERROR};
-
-	bool success = _dataman_client.readSync(DM_KEY_MISSION_STATE, 0, reinterpret_cast<uint8_t *>(&mission),
-						sizeof(mission_s));
-
-	if (success) {
-		if (isMissionValid(mission)) {
-			_mission = mission;
-			ret_val = PX4_OK;
-
-		} else {
-			resetMission();
-		}
-
-	} else {
-		PX4_ERR("Could not initialize Mission: Dataman read failed");
-		resetMission();
-	}
-
-	return ret_val;
 }
 
 void
@@ -118,31 +102,35 @@ void MissionBase::updateMavlinkMission()
 						  static_cast<int32_t>(new_mission.count) - 1);
 		}
 
-		_mission = new_mission;
+		if (new_mission.geofence_id != _mission.geofence_id) {
+			// New geofence data, need to check mission again.
+			_mission_checked = false;
+		}
 
-		_is_current_planned_mission_item_valid = isMissionValid(_mission);
+		_mission = new_mission;
 
 		/* Relevant mission items updated externally*/
 		if (mission_data_changed) {
 
 			onMissionUpdate(mission_items_changed);
 		}
+
+		_is_current_planned_mission_item_valid = isMissionValid();
 	}
 }
 
 void MissionBase::onMissionUpdate(bool has_mission_items_changed)
 {
-	_is_current_planned_mission_item_valid = _mission.count > 0;
-
 	if (has_mission_items_changed) {
 		_dataman_cache.invalidate();
 		_load_mission_index = -1;
 
-		check_mission_valid();
+		if (canRunMissionFeasibility()) {
+			_mission_checked = true;
+			check_mission_valid();
 
-		// only warn if the check failed on merit
-		if ((!_navigator->get_mission_result()->valid) && _mission.count > 0U) {
-			PX4_WARN("mission check failed");
+		} else {
+			_mission_checked = false;
 		}
 	}
 
@@ -168,15 +156,17 @@ MissionBase::on_inactive()
 	_land_detected_sub.update();
 	_vehicle_status_sub.update();
 	_global_pos_sub.update();
+	_geofence_status_sub.update();
 
 	parameters_update();
 
 	updateMavlinkMission();
 
-	/* Need to check the initialized mission once, have to do it here, since we need to wait for the home position. */
-	if (_navigator->home_global_position_valid() && !_initialized_mission_checked) {
+	/* Check the mission */
+	if (!_mission_checked && canRunMissionFeasibility()) {
+		_mission_checked = true;
 		check_mission_valid();
-		_initialized_mission_checked = true;
+		_is_current_planned_mission_item_valid = isMissionValid();
 	}
 
 	if (_vehicle_status_sub.get().arming_state != vehicle_status_s::ARMING_STATE_ARMED) {
@@ -217,8 +207,6 @@ MissionBase::on_activation()
 	_mission_has_been_activated = true;
 	_system_disarmed_while_inactive = false;
 
-	check_mission_valid();
-
 	update_mission();
 
 	// reset the cache and fill it with the items up to the previous item. The cache contains
@@ -247,6 +235,7 @@ MissionBase::on_activation()
 	checkClimbRequired(_mission.current_seq);
 	set_mission_items();
 
+	_mission_activation_index = _mission.current_seq;
 	_inactivation_index = -1; // reset
 
 	// reset cruise speed
@@ -259,11 +248,22 @@ MissionBase::on_active()
 	_land_detected_sub.update();
 	_vehicle_status_sub.update();
 	_global_pos_sub.update();
+	_geofence_status_sub.update();
 
 	parameters_update();
 
 	updateMavlinkMission();
 	updateDatamanCache();
+	updateMissionAltAfterHomeChanged();
+
+	/* Check the mission */
+	if (!_mission_checked && canRunMissionFeasibility()) {
+		_mission_checked = true;
+		check_mission_valid();
+		_is_current_planned_mission_item_valid = isMissionValid();
+		update_mission();
+		set_mission_items();
+	}
 
 	// check if heading alignment is necessary, and add it to the current mission item if necessary
 	if (_align_heading_necessary && is_mission_item_reached_or_completed()) {
@@ -294,17 +294,27 @@ MissionBase::on_active()
 		_align_heading_necessary = false;
 	}
 
-	// replay gimbal and camera commands immediately after resuming mission
-	if (haveCachedGimbalOrCameraItems()) {
-		replayCachedGimbalCameraItems();
+	// Replay camera mode commands immediately upon mission resume
+	if (haveCachedCameraModeItems()) {
+		replayCachedCameraModeItems();
 	}
 
-	// replay trigger commands upon raching the resume waypoint if the trigger relay flag is set
-	if (cameraWasTriggering() && is_mission_item_reached_or_completed()) {
-		replayCachedTriggerItems();
-	}
 
-	replayCachedSpeedChangeItems();
+	// Replay cached mission commands once the last mission waypoint is re-reached after the mission interruption.
+	// Each replay function also clears the cached items afterwards
+	if (_mission.current_seq > _mission_activation_index) {
+		// replay gimbal commands
+		if (haveCachedGimbalItems()) {
+			replayCachedGimbalItems();
+		}
+
+		// replay trigger commands
+		if (cameraWasTriggering()) {
+			replayCachedTriggerItems();
+		}
+
+		replayCachedSpeedChangeItems();
+	}
 
 	/* lets check if we reached the current mission item */
 	if (_mission_type != MissionType::MISSION_TYPE_NONE && is_mission_item_reached_or_completed()) {
@@ -353,11 +363,49 @@ MissionBase::on_active()
 	} else if (_navigator->get_precland()->is_activated()) {
 		_navigator->get_precland()->on_inactivation();
 	}
+
+	updateAltToAvoidTerrainCollisionAndRepublishTriplet(_mission_item);
+}
+
+bool
+MissionBase::isLanding()
+{
+	if (hasMissionLandStart() && (_mission.current_seq > _mission.land_start_index)) {
+		static constexpr size_t max_num_next_items{1u};
+		int32_t next_mission_items_index[max_num_next_items];
+		size_t num_found_items;
+
+		getNextPositionItems(_mission.land_start_index + 1, next_mission_items_index, num_found_items, max_num_next_items);
+
+		// vehicle is currently landing if
+		//  mission valid, still flying, and in the landing portion of mission (past land start marker)
+		bool on_landing_stage = (num_found_items > 0U) &&  _mission.current_seq > next_mission_items_index[0U];
+
+		// special case: if the land start index is at a LOITER_TO_ALT WP, then we're in the landing sequence already when the
+		// distance to the WP is below the loiter radius + acceptance.
+		if ((num_found_items > 0U) && _mission.current_seq == next_mission_items_index[0U]
+		    && _mission_item.nav_cmd == NAV_CMD_LOITER_TO_ALT) {
+			const float d_current = get_distance_to_next_waypoint(_mission_item.lat, _mission_item.lon,
+						_navigator->get_global_position()->lat, _navigator->get_global_position()->lon);
+
+			// consider mission_item.loiter_radius invalid if NAN or 0, use default value in this case.
+			const float mission_item_loiter_radius_abs = (PX4_ISFINITE(_mission_item.loiter_radius)
+					&& fabsf(_mission_item.loiter_radius) > FLT_EPSILON) ? fabsf(_mission_item.loiter_radius) :
+					_navigator->get_loiter_radius();
+
+			on_landing_stage = d_current <= (_navigator->get_acceptance_radius() + mission_item_loiter_radius_abs);
+		}
+
+		return _navigator->get_mission_result()->valid && on_landing_stage;
+
+	} else {
+		return false;
+	}
 }
 
 void MissionBase::update_mission()
 {
-	if (_mission.count == 0u || !_is_current_planned_mission_item_valid || !_navigator->get_mission_result()->valid) {
+	if (_mission.count == 0u || !_is_current_planned_mission_item_valid || !isMissionValid()) {
 		if (_land_detected_sub.get().landed) {
 			/* landed, refusing to take off without a mission */
 			mavlink_log_critical(_navigator->get_mavlink_log_pub(), "No valid mission available, refusing takeoff\t");
@@ -442,24 +490,33 @@ MissionBase::advance_mission()
 void
 MissionBase::set_mission_items()
 {
-	if (_is_current_planned_mission_item_valid) {
-		/* By default set the mission item to the current planned mission item. Depending on request, it can be altered. */
-		loadCurrentMissionItem();
+	bool set_end_of_mission{false};
 
-		/* force vtol land */
-		if (_navigator->force_vtol() && _mission_item.nav_cmd == NAV_CMD_LAND) {
-			_mission_item.nav_cmd = NAV_CMD_VTOL_LAND;
+	if (_is_current_planned_mission_item_valid && _mission_type == MissionType::MISSION_TYPE_MISSION && isMissionValid()) {
+		/* By default set the mission item to the current planned mission item. Depending on request, it can be altered. */
+		if (loadCurrentMissionItem()) {
+			/* force vtol land */
+			if (_navigator->force_vtol() && _mission_item.nav_cmd == NAV_CMD_LAND) {
+				_mission_item.nav_cmd = NAV_CMD_VTOL_LAND;
+			}
+
+			setActiveMissionItems();
+
+		} else {
+			set_end_of_mission = true;
 		}
 
-		setActiveMissionItems();
-
 	} else {
+		set_end_of_mission = true;
+	}
+
+	if (set_end_of_mission) {
 		setEndOfMissionItems();
-		_navigator->mode_completed(vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION);
+		_navigator->mode_completed(getNavigatorStateId());
 	}
 }
 
-void MissionBase::loadCurrentMissionItem()
+bool MissionBase::loadCurrentMissionItem()
 {
 	const dm_item_t dm_item = static_cast<dm_item_t>(_mission.mission_dataman_id);
 	bool success = _dataman_cache.loadWait(dm_item, _mission.current_seq, reinterpret_cast<uint8_t *>(&_mission_item),
@@ -470,6 +527,8 @@ void MissionBase::loadCurrentMissionItem()
 		events::send(events::ID("mission_item_set_failed"), events::Log::Error,
 			     "Mission item could not be set");
 	}
+
+	return success;
 }
 
 void MissionBase::setEndOfMissionItems()
@@ -542,6 +601,13 @@ void MissionBase::handleLanding(WorkItemType &new_work_item_type, mission_item_s
 				  (_vehicle_status_sub.get().vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING) &&
 				  (_mission_item.nav_cmd == NAV_CMD_VTOL_LAND) &&
 				  !_land_detected_sub.get().landed;
+
+	/* ignore yaw for landing items */
+	/* XXX: if specified heading for landing is desired we could add another step before the descent
+		* that aligns the vehicle first */
+	if (_mission_item.nav_cmd == NAV_CMD_LAND || _mission_item.nav_cmd == NAV_CMD_VTOL_LAND) {
+		_mission_item.yaw = NAN;
+	}
 
 	/* move to land wp as fixed wing */
 	if (needs_vtol_landing) {
@@ -631,13 +697,6 @@ void MissionBase::handleLanding(WorkItemType &new_work_item_type, mission_item_s
 			}
 		}
 	}
-
-	/* ignore yaw for landing items */
-	/* XXX: if specified heading for landing is desired we could add another step before the descent
-		* that aligns the vehicle first */
-	if (_mission_item.nav_cmd == NAV_CMD_LAND || _mission_item.nav_cmd == NAV_CMD_VTOL_LAND) {
-		_mission_item.yaw = NAN;
-	}
 }
 
 bool MissionBase::position_setpoint_equal(const position_setpoint_s *p1, const position_setpoint_s *p2) const
@@ -678,7 +737,7 @@ MissionBase::checkMissionRestart()
 	    && ((_mission.current_seq + 1) == _mission.count)) {
 		setMissionIndex(0);
 		_inactivation_index = -1; // reset
-		_is_current_planned_mission_item_valid = isMissionValid(_mission);
+		_is_current_planned_mission_item_valid = isMissionValid();
 		resetMissionJumpCounter();
 		_navigator->reset_cruising_speed();
 		_navigator->reset_vroi();
@@ -687,11 +746,13 @@ MissionBase::checkMissionRestart()
 }
 
 void
-MissionBase::check_mission_valid()
+MissionBase::check_mission_valid(bool forced)
 {
-	if ((_navigator->get_mission_result()->mission_id != _mission.mission_id)
-	    || (_navigator->get_mission_result()->geofence_id != _mission.geofence_id)
-	    || (_navigator->get_mission_result()->home_position_counter != _navigator->get_home_position()->update_count)) {
+	// Allow forcing it, since we currently not rechecking if parameters have changed.
+	if (forced ||
+	    (_navigator->get_mission_result()->mission_id != _mission.mission_id) ||
+	    (_navigator->get_mission_result()->geofence_id != _mission.geofence_id) ||
+	    (_navigator->get_mission_result()->home_position_counter != _navigator->get_home_position()->update_count)) {
 
 		_navigator->get_mission_result()->mission_id = _mission.mission_id;
 		_navigator->get_mission_result()->geofence_id = _mission.geofence_id;
@@ -704,6 +765,12 @@ MissionBase::check_mission_valid()
 		_navigator->get_mission_result()->failure = false;
 
 		set_mission_result();
+
+		// only warn if the check failed on merit
+		if ((!_navigator->get_mission_result()->valid) && _mission.count > 0U) {
+			PX4_WARN("mission check failed");
+		}
+
 	}
 }
 
@@ -850,7 +917,6 @@ void MissionBase::publish_navigator_mission_item()
 {
 	navigator_mission_item_s navigator_mission_item{};
 
-	navigator_mission_item.instance_count = _navigator->mission_instance_count();
 	navigator_mission_item.sequence_current = _mission.current_seq;
 	navigator_mission_item.nav_cmd = _mission_item.nav_cmd;
 	navigator_mission_item.latitude = _mission_item.lat;
@@ -876,16 +942,16 @@ void MissionBase::publish_navigator_mission_item()
 	_navigator_mission_item_pub.publish(navigator_mission_item);
 }
 
-bool MissionBase::isMissionValid(mission_s &mission) const
+bool MissionBase::isMissionValid() const
 {
 	bool ret_val{false};
 
-	if (((mission.current_seq < mission.count) || (mission.count == 0U && mission.current_seq <= 0)) &&
-	    (mission.mission_dataman_id == DM_KEY_WAYPOINTS_OFFBOARD_0
-	     || mission.mission_dataman_id == DM_KEY_WAYPOINTS_OFFBOARD_1) &&
-	    (mission.timestamp != 0u)) {
+	if (((_mission.current_seq < _mission.count) || (_mission.count == 0U && _mission.current_seq <= 0)) &&
+	    (_mission.mission_dataman_id == DM_KEY_WAYPOINTS_OFFBOARD_0 ||
+	     _mission.mission_dataman_id == DM_KEY_WAYPOINTS_OFFBOARD_1) &&
+	    (_mission.timestamp != 0u) &&
+	    (_navigator->get_mission_result()->valid)) {
 		ret_val = true;
-
 	}
 
 	return ret_val;
@@ -1141,7 +1207,7 @@ int MissionBase::setMissionToClosestItem(double lat, double lon, float alt, floa
 void MissionBase::resetMission()
 {
 	/* we do not need to reset mission if is already.*/
-	if (_mission.count == 0u && isMissionValid(_mission)) {
+	if (_mission.count == 0u) {
 		return;
 	}
 
@@ -1236,7 +1302,7 @@ void MissionBase::cacheItem(const mission_item_s &mission_item)
 	}
 }
 
-void MissionBase::replayCachedGimbalCameraItems()
+void MissionBase::replayCachedGimbalItems()
 {
 	if (_last_gimbal_configure_item.nav_cmd > 0) {
 		issue_command(_last_gimbal_configure_item);
@@ -1247,7 +1313,10 @@ void MissionBase::replayCachedGimbalCameraItems()
 		issue_command(_last_gimbal_control_item);
 		_last_gimbal_control_item = {}; // delete cached item
 	}
+}
 
+void MissionBase::replayCachedCameraModeItems()
+{
 	if (_last_camera_mode_item.nav_cmd > 0) {
 		issue_command(_last_camera_mode_item);
 		_last_camera_mode_item = {}; // delete cached item
@@ -1278,11 +1347,15 @@ void MissionBase::resetItemCache()
 	_last_camera_trigger_item = {};
 }
 
-bool MissionBase::haveCachedGimbalOrCameraItems()
+bool MissionBase::haveCachedGimbalItems()
 {
 	return _last_gimbal_configure_item.nav_cmd > 0 ||
-	       _last_gimbal_control_item.nav_cmd > 0 ||
-	       _last_camera_mode_item.nav_cmd > 0;
+	       _last_gimbal_control_item.nav_cmd > 0;
+}
+
+bool MissionBase::haveCachedCameraModeItems()
+{
+	return _last_camera_mode_item.nav_cmd > 0;
 }
 
 bool MissionBase::cameraWasTriggering()
@@ -1359,4 +1432,39 @@ bool MissionBase::checkMissionDataChanged(mission_s new_mission)
 	return ((new_mission.mission_dataman_id != _mission.mission_dataman_id) ||
 		(new_mission.mission_id != _mission.mission_id) ||
 		(new_mission.current_seq != _mission.current_seq));
+}
+
+bool MissionBase::canRunMissionFeasibility()
+{
+	return _navigator->home_global_position_valid() && // Need to have a home position checked
+	       _navigator->get_global_position()->timestamp > 0 && // Need to have a position, for first waypoint check
+	       (_geofence_status_sub.get().timestamp > 0) && // Geofence data must be loaded
+	       (_geofence_status_sub.get().geofence_id == _mission.geofence_id) &&
+	       (_geofence_status_sub.get().status == geofence_status_s::GF_STATUS_READY);
+}
+
+void MissionBase::updateMissionAltAfterHomeChanged()
+{
+	if (_navigator->get_home_position()->update_count > _home_update_counter) {
+		float new_alt = get_absolute_altitude_for_item(_mission_item);
+		float altitude_diff = new_alt - _navigator->get_position_setpoint_triplet()->current.alt;
+
+		if (_navigator->get_position_setpoint_triplet()->previous.valid
+		    && PX4_ISFINITE(_navigator->get_position_setpoint_triplet()->previous.alt)) {
+			_navigator->get_position_setpoint_triplet()->previous.alt = _navigator->get_position_setpoint_triplet()->previous.alt +
+					altitude_diff;
+		}
+
+		_navigator->get_position_setpoint_triplet()->current.alt = _navigator->get_position_setpoint_triplet()->current.alt +
+				altitude_diff;
+
+		if (_navigator->get_position_setpoint_triplet()->next.valid
+		    && PX4_ISFINITE(_navigator->get_position_setpoint_triplet()->next.alt)) {
+			_navigator->get_position_setpoint_triplet()->next.alt = _navigator->get_position_setpoint_triplet()->next.alt +
+					altitude_diff;
+		}
+
+		_navigator->set_position_setpoint_triplet_updated();
+		_home_update_counter = _navigator->get_home_position()->update_count;
+	}
 }

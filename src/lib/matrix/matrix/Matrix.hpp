@@ -162,6 +162,24 @@ public:
 		return res;
 	}
 
+	// Using this function reduces the number of temporary variables needed to compute A * B.T
+	template<size_t P>
+	Matrix<Type, M, M> multiplyByTranspose(const Matrix<Type, P, N> &other) const
+	{
+		Matrix<Type, M, P> res;
+		const Matrix<Type, M, N> &self = *this;
+
+		for (size_t i = 0; i < M; i++) {
+			for (size_t k = 0; k < P; k++) {
+				for (size_t j = 0; j < N; j++) {
+					res(i, k) += self(i, j) * other(k, j);
+				}
+			}
+		}
+
+		return res;
+	}
+
 	// Element-wise multiplication
 	Matrix<Type, M, N> emult(const Matrix<Type, M, N> &other) const
 	{
@@ -384,6 +402,7 @@ public:
 		}
 
 		const Matrix<Type, M, N> &self = *this;
+		bool is_prev_symmetric = true; // assume symmetric until one element is not
 
 		for (unsigned i = 0; i < M; i++) {
 			printf("%2u|", i); // print row numbering
@@ -392,7 +411,7 @@ public:
 				double d = static_cast<double>(self(i, j));
 
 				// if symmetric don't print upper triangular elements
-				if ((M == N) && (j > i) && (i < N) && (j < M)
+				if (is_prev_symmetric && (M == N) && (j > i) && (i < N) && (j < M)
 				    && (fabs(d - static_cast<double>(self(j, i))) < (double)eps)
 				   ) {
 					// print empty space
@@ -410,6 +429,8 @@ public:
 					} else {
 						printf("% 6.5f ", d);
 					}
+
+					is_prev_symmetric = false; // not symmetric if once inside here
 				}
 			}
 
